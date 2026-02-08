@@ -1,4 +1,4 @@
-﻿# cfscanner
+﻿# CFScanner
 
 > **A high-performance Cloudflare IP scanner using TCP, TLS/HTTP
 > heuristics, and optional real-world validation via Xray/V2Ray.**
