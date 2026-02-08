@@ -190,23 +190,19 @@ cfscanner --asn cloudflare --v2ray-config config.json --v2ray-workers 6
 
 ### ⛔ Exclusion Options
 
-  -----------------------------------------------------------------------
-  Option                     Description
-  -------------------------- --------------------------------------------
-  `-xa, --exclude-asn`       Exclude specific ASNs or Organizations.
-
-  `-xf, --exclude-file`      Exclude IPs/CIDRs listed in a file.
-
-  `-xr, --exclude-range`     Exclude inline IPs or CIDRs.
-  -----------------------------------------------------------------------
+  Option                   Description
+  ------------------------ -----------------------------------------
+  `-xa, --exclude-asn`     Exclude specific ASNs or Organizations.
+  `-xf, --exclude-file`    Exclude IPs/CIDRs listed in a file.
+  `-xr, --exclude-range`   Exclude inline IPs or CIDRs.
 
 ### ⚡ Performance & Tuning
 
 Recommended settings for high-latency/unstable networks (e.g., Iran):
 
-  --------------------------------------------------------------------------------
+  -------------------------------------------------------------------------------
   Option                  Default   Description
-  ----------------------- --------- ----------------------------------------------
+  ----------------------- --------- ---------------------------------------------
   `--tcp-workers`         100       Concurrent TCP connection attempts. Rec:
                                     40--70
 
@@ -217,20 +213,20 @@ Recommended settings for high-latency/unstable networks (e.g., Iran):
   `--tcp-buffer`          100       Buffer size between TCP and Heuristic stages.
 
   `--v2ray-buffer`        30        Buffer size before the V2Ray stage.
-  --------------------------------------------------------------------------------
+  -------------------------------------------------------------------------------
 
 ### 📤 Output Options
 
-  ------------------------------------------------------------------------
+  --------------------------------------------------------------------------
   Option                Description
-  --------------------- --------------------------------------------------
+  --------------------- ----------------------------------------------------
   `--sort`              Sort the final results file by latency (Lowest to
                         Highest).
 
   `-nl, --no-latency`   Do not save latency timing in the output file.
 
   `-s, --shuffle`       Shuffle the input IP list before scanning.
-  ------------------------------------------------------------------------
+  --------------------------------------------------------------------------
 
 ------------------------------------------------------------------------
 
