@@ -24,6 +24,7 @@
 
 # Visual Studio 14+ cache/options directory
 .vs/
+/Properties/
 
 # Visual Studio 15+ auto generated files
 Generated\ Files/
