@@ -3,7 +3,7 @@
 > **A high-performance Cloudflare IP scanner using TCP, TLS/HTTP
 > heuristics, and optional real-world validation via Xray/V2Ray.**
 
-![Platform](https://img.shields.io/badge/platform-win%20%7C%20linux%20%7C%20osx-lightgrey)
+![Platform](https://img.shields.io/badge/platform-win%20%7C%20linux%20%7C%20mac-lightgrey)
 ![.NET](https://img.shields.io/badge/.NET-8.0-512bd4)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
