@@ -6,6 +6,24 @@ using CFScanner.UI;
 using CFScanner.Utils;
 
 // -------------------------------------------------------------------
+// Active VPN/PROXY Check
+// -------------------------------------------------------------------
+if (VpnDetector.ShouldWarn())
+{
+    Console.ForegroundColor = ConsoleColor.Yellow;
+    Console.WriteLine("\nWARNING: Potential VPN or Proxy connection detected.");
+    Console.WriteLine("Scanning through a VPN may cause abuse reports or IP bans.");
+    Console.WriteLine("It is recommended to disable it before scanning to use your direct connection.");
+    Console.ForegroundColor = ConsoleColor.DarkCyan;
+    Console.WriteLine("Press Y to continue, any other key to exit.");
+    Console.ResetColor();
+    var key = Console.ReadKey(true);
+    if (key.Key != ConsoleKey.Y)
+    {
+        Environment.Exit(0);
+    }
+}
+// -------------------------------------------------------------------
 // Global cancellation and Ctrl+C handler
 // -------------------------------------------------------------------
 Console.CancelKeyPress += (s, e) =>
@@ -203,7 +221,7 @@ for (int i = 0; i < GlobalContext.Config.HeuristicWorkers; i++)
 // -------------------------------------------------------------------
 // Stage 3 workers (Xray real proxy test)
 // -------------------------------------------------------------------
-Task[] v2rayTasks = Array.Empty<Task>();
+Task[] v2rayTasks = [];
 if (GlobalContext.Config.EnableV2RayCheck && v2rayChannel != null)
 {
     v2rayTasks = new Task[GlobalContext.Config.V2RayWorkers];

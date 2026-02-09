@@ -357,7 +357,7 @@ NOTES
 -----
 • Increasing workers too much may reduce performance.
 • If the scan becomes unstable, reduce heuristic workers first.
-• Tool created by Mohammad Rambod for educational purposes only.
+• Tool created for educational purposes only.
 
 -----------------------------------------------------------------------
 
