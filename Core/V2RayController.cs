@@ -8,18 +8,30 @@ using CFScanner.Utils;
 namespace CFScanner.Core;
 
 /// <summary>
-/// Manages Xray/V2Ray processes and performs real proxy verification.
+/// Manages Xray/V2Ray lifecycle and performs real proxy verification.
+/// This stage validates IPs by running a real Xray instance and testing
+/// traffic through a local HTTP proxy.
 /// </summary>
 public static class V2RayController
 {
+    // ---------------------------------------------------------------------
+    // Configuration Validation
+    // ---------------------------------------------------------------------
+
     /// <summary>
-    /// Validates the user-provided Xray configuration file by running 'xray run -c ... -test'.
+    /// Validates the user-provided Xray configuration by running:
+    /// <c>xray run -c &lt;config&gt; -test</c>.
+    /// This ensures the configuration is syntactically and semantically valid
+    /// before starting any scan.
     /// </summary>
     /// <param name="configPath">Path to the Xray JSON configuration file.</param>
-    /// <returns>True if the configuration is valid; otherwise false.</returns>
+    /// <returns>
+    /// True if the configuration is valid and accepted by Xray; otherwise false.
+    /// </returns>
     public static async Task<bool> ValidateXrayConfigAsync(string configPath)
     {
         Console.WriteLine($"[Init] Validating Xray config: {Path.GetFileName(configPath)}");
+
         try
         {
             var psi = new ProcessStartInfo
@@ -31,110 +43,146 @@ public static class V2RayController
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
-            using var process = Process.Start(psi);
-            if (process == null) return false;
 
+            using var process = Process.Start(psi);
+            if (process == null)
+                return false;
+
+            // Read both stdout and stderr to avoid process blocking
             string output = await process.StandardOutput.ReadToEndAsync();
             string error = await process.StandardError.ReadToEndAsync();
             await process.WaitForExitAsync();
 
             string fullLog = output + Environment.NewLine + error;
-            if (fullLog.Contains("Configuration OK"))
+
+            // Xray prints "Configuration OK" on successful validation
+            if (fullLog.Contains("Configuration OK", StringComparison.OrdinalIgnoreCase))
             {
                 Console.ForegroundColor = ConsoleColor.Green;
-                Console.WriteLine(" [OK] Xray Configuration is valid.");
+                Console.WriteLine(" [OK] Xray configuration is valid.");
                 Console.ResetColor();
                 return true;
             }
-            else
-            {
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine(" [FAIL] Xray Configuration Error:");
-                Console.WriteLine(fullLog);
-                Console.ResetColor();
-                return false;
-            }
+
+            // Validation failed: print full error output
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine(" [FAIL] Xray configuration error:");
+            Console.WriteLine(fullLog);
+            Console.ResetColor();
+            return false;
         }
         catch (Exception ex)
         {
-            ConsoleInterface.PrintError($"Failed to run xray validation: {ex.Message}");
+            ConsoleInterface.PrintError(
+                $"Failed to run Xray configuration validation: {ex.Message}");
             return false;
         }
     }
 
+    // ---------------------------------------------------------------------
+    // Real Proxy Verification
+    // ---------------------------------------------------------------------
+
     /// <summary>
-    /// Performs a real proxy test using a temporary Xray instance configured for the given IP.
+    /// Performs a real end-to-end proxy test using a temporary Xray instance.
+    /// 
+    /// Flow:
+    ///   1. Inject the target IP into the user template
+    ///   2. Start Xray with an HTTP inbound on a random local port
+    ///   3. Wait for the proxy to become ready
+    ///   4. Send a real HTTP request through the proxy
     /// </summary>
-    /// <param name="ipAddress">Target IP address to test.</param>
-    /// <param name="heuristicLatency">Latency measured during the heuristic stage (unused but kept for future).</param>
+    /// <param name="ipAddress">Target IP address to verify.</param>
+    /// <param name="heuristicLatency">
+    /// Latency measured during heuristic stage (kept for correlation/future use).
+    /// </param>
     public static async Task TestV2RayConnection(string ipAddress, long heuristicLatency)
     {
         int localPort = GetFreeTcpPort();
         Process? xrayProcess = null;
+
         try
         {
-            // Parse the template JSON and replace the inbound with a local HTTP proxy.
+            // Parse the raw template JSON (loaded once at startup)
             var rootNode = JsonNode.Parse(GlobalContext.RawV2RayTemplate);
-            if (rootNode == null) return;
+            if (rootNode == null)
+                return;
 
+            // Force a local HTTP inbound for testing purposes
             rootNode["inbounds"] = new JsonArray(new JsonObject
             {
                 ["port"] = localPort,
                 ["listen"] = "127.0.0.1",
                 ["protocol"] = "http",
                 ["tag"] = "http-in-test",
-                ["settings"] = new JsonObject { ["allowTransparent"] = false, ["timeout"] = 0 }
+                ["settings"] = new JsonObject
+                {
+                    ["allowTransparent"] = false,
+                    ["timeout"] = 0
+                }
             });
 
-            string finalConfigJson = rootNode.ToJsonString();
-            finalConfigJson = finalConfigJson.Replace("IP.IP.IP.IP", ipAddress);
+            // Inject the target IP into the outbound section
+            string finalConfigJson = rootNode.ToJsonString()
+                .Replace("IP.IP.IP.IP", ipAddress);
 
-            // Start Xray with the modified configuration
+            // Start Xray and provide config via stdin (no temp files)
             xrayProcess = StartXrayProcess(finalConfigJson);
-            if (xrayProcess == null || xrayProcess.HasExited) return;
+            if (xrayProcess == null || xrayProcess.HasExited)
+                return;
 
-            // Wait for the proxy to become ready
-            if (!await WaitForLocalPort(localPort, GlobalContext.Config.XrayStartupTimeoutMs)) return;
+            // Wait until the local HTTP proxy port is open
+            if (!await WaitForLocalPort(
+                    localPort,
+                    GlobalContext.Config.XrayStartupTimeoutMs))
+                return;
 
-            // Test the proxy by making an HTTP request
+            // Test real traffic through the proxy
             var sw = Stopwatch.StartNew();
             bool works = await TestThroughHttpProxy(localPort);
             sw.Stop();
 
             if (works)
             {
-                // FIXED: Use the method call instead of Interlocked on property
                 GlobalContext.IncrementV2RayPassed();
 
                 long totalLatency = sw.ElapsedMilliseconds;
                 FileUtils.SaveResult(ipAddress, totalLatency);
-                ConsoleInterface.PrintSuccess(ipAddress, totalLatency, "REAL-XRAY");
+                ConsoleInterface.PrintSuccess(
+                    ipAddress, totalLatency, "REAL-XRAY");
             }
         }
         catch
         {
-            // Silent catch: any failure means the IP is not valid.
+            // Silent failure:
+            // any error here simply means the IP is not a valid proxy endpoint
         }
         finally
         {
+            // Ensure the Xray process is always terminated
             if (xrayProcess != null && !xrayProcess.HasExited)
             {
                 try
                 {
                     xrayProcess.Kill();
-                    xrayProcess.WaitForExit(GlobalContext.Config.XrayProcessKillTimeoutMs);
+                    xrayProcess.WaitForExit(
+                        GlobalContext.Config.XrayProcessKillTimeoutMs);
                 }
                 catch { }
+
                 xrayProcess.Dispose();
             }
         }
     }
 
+    // ---------------------------------------------------------------------
+    // Xray Process Management
+    // ---------------------------------------------------------------------
+
     /// <summary>
-    /// Starts an Xray process with the provided JSON config supplied via standard input.
+    /// Starts an Xray process using configuration supplied via standard input.
+    /// Avoids writing temporary files to disk.
     /// </summary>
-    /// <param name="jsonConfig">The Xray configuration JSON string.</param>
-    /// <returns>The started Process object, or null on failure.</returns>
     private static Process? StartXrayProcess(string jsonConfig)
     {
         try
@@ -149,16 +197,21 @@ public static class V2RayController
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             };
-            var p = new Process { StartInfo = psi };
-            p.Start();
-            // We don't need to capture output, but we need to read it to prevent deadlocks.
-            p.BeginOutputReadLine();
-            p.BeginErrorReadLine();
-            using (var writer = p.StandardInput)
+
+            var process = new Process { StartInfo = psi };
+            process.Start();
+
+            // Begin reading output streams to prevent deadlocks
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+
+            // Write config to stdin and close it
+            using (var writer = process.StandardInput)
             {
                 writer.Write(jsonConfig);
             }
-            return p;
+
+            return process;
         }
         catch
         {
@@ -166,11 +219,14 @@ public static class V2RayController
         }
     }
 
+    // ---------------------------------------------------------------------
+    // Proxy & Networking Helpers
+    // ---------------------------------------------------------------------
+
     /// <summary>
-    /// Tests the HTTP proxy running on the given local port by requesting a known URL.
+    /// Tests whether the local HTTP proxy can successfully relay traffic
+    /// by requesting a well-known lightweight endpoint.
     /// </summary>
-    /// <param name="localPort">Port of the local HTTP proxy.</param>
-    /// <returns>True if the request succeeds (HTTP 200 or 204).</returns>
     private static async Task<bool> TestThroughHttpProxy(int localPort)
     {
         try
@@ -179,12 +235,25 @@ public static class V2RayController
             {
                 Proxy = new WebProxy($"http://127.0.0.1:{localPort}"),
                 UseProxy = true,
-                ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+
+                // Certificate validation is disabled because traffic
+                // is intentionally MITM'd by the proxy
+                ServerCertificateCustomValidationCallback =
+                    (_, _, _, _) => true
             };
-            using var client = new HttpClient(handler);
-            client.Timeout = TimeSpan.FromMilliseconds(GlobalContext.Config.XrayConnectionTimeoutMs);
-            var response = await client.GetAsync("http://www.gstatic.com/generate_204");
-            return response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.NoContent;
+
+            using var client = new HttpClient(handler)
+            {
+                Timeout = TimeSpan.FromMilliseconds(
+                    GlobalContext.Config.XrayConnectionTimeoutMs)
+            };
+
+            // Google endpoint returns 204 quickly (minimal payload)
+            var response = await client.GetAsync(
+                "http://www.gstatic.com/generate_204");
+
+            return response.IsSuccessStatusCode ||
+                   response.StatusCode == HttpStatusCode.NoContent;
         }
         catch
         {
@@ -193,9 +262,8 @@ public static class V2RayController
     }
 
     /// <summary>
-    /// Finds a free TCP port on the loopback interface.
+    /// Finds an available TCP port on the loopback interface.
     /// </summary>
-    /// <returns>An available port number.</returns>
     private static int GetFreeTcpPort()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -204,26 +272,29 @@ public static class V2RayController
     }
 
     /// <summary>
-    /// Waits for a local port to become open, indicating the proxy is ready.
+    /// Polls until a local TCP port becomes reachable, indicating
+    /// that the proxy has finished starting up.
     /// </summary>
-    /// <param name="port">Port to check.</param>
-    /// <param name="timeoutMs">Maximum wait time in milliseconds.</param>
-    /// <returns>True if the port becomes open within the timeout; otherwise false.</returns>
     private static async Task<bool> WaitForLocalPort(int port, int timeoutMs)
     {
         var sw = Stopwatch.StartNew();
+
         while (sw.ElapsedMilliseconds < timeoutMs)
         {
             try
             {
                 using var client = new TcpClient();
                 var connectTask = client.ConnectAsync("127.0.0.1", port);
-                if (await Task.WhenAny(connectTask, Task.Delay(50)) == connectTask && client.Connected)
+
+                if (await Task.WhenAny(connectTask, Task.Delay(50)) == connectTask &&
+                    client.Connected)
                     return true;
             }
             catch { }
+
             await Task.Delay(50);
         }
+
         return false;
     }
 }

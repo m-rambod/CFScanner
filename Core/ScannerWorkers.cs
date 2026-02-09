@@ -12,31 +12,46 @@ using CFScanner.Utils;
 namespace CFScanner.Core;
 
 /// <summary>
-/// Contains worker methods for the scanning pipeline: TCP connection, heuristic checks (TLS/HTTP), and V2Ray testing.
+/// Implements worker logic for the multi-stage scanning pipeline.
+///
+/// Pipeline overview:
+///   Stage 1 (Producer) : TCP connection attempts (port 443)
+///   Stage 2 (Consumer) : TLS + HTTP heuristic detection
+///   Stage 3 (Consumer) : Real V2Ray/Xray proxy verification (optional)
+///
+/// Each stage communicates via bounded channels to enforce backpressure
+/// and prevent unbounded memory growth.
 /// </summary>
 public static class ScannerWorkers
 {
-    // ---------------------------------------------------------
-    // Data Structures for Channel Communication
-    // ---------------------------------------------------------
+    // ---------------------------------------------------------------------
+    // Channel Data Contracts
+    // ---------------------------------------------------------------------
 
     /// <summary>
-    /// Represents an active TCP connection passed from the producer to the consumer.
+    /// Represents a live TCP connection established in Stage 1
+    /// and handed off to heuristic workers.
     /// </summary>
     public record LiveConnection(IPAddress Ip, TcpClient Client);
 
     /// <summary>
-    /// Represents a result from the heuristic stage, ready for V2Ray verification.
+    /// Represents a heuristic-passed IP along with its measured latency,
+    /// ready for real V2Ray/Xray verification.
     /// </summary>
     public record HeuristicResult(IPAddress Ip, long HeuristicLatency);
 
-    // ---------------------------------------------------------
-    // Stage 1: Producer (TCP Connect)
-    // ---------------------------------------------------------
+    // ---------------------------------------------------------------------
+    // Stage 1: Producer (TCP Connection)
+    // ---------------------------------------------------------------------
 
     /// <summary>
-    /// Attempts to establish a TCP connection to port 443. If successful, passes the connected client to the consumer.
+    /// Attempts to establish a TCP connection to port 443.
+    /// On success, the connected socket is forwarded to Stage 2.
     /// </summary>
+    /// <remarks>
+    /// Uses aggressive socket cleanup (linger=0) to avoid TIME_WAIT buildup
+    /// during high‑volume scans.
+    /// </remarks>
     public static async Task ProducerWorker(
         IPAddress ip,
         ChannelWriter<LiveConnection> writer,
@@ -47,13 +62,15 @@ public static class ScannerWorkers
 
         try
         {
-            // Set linger option to reset connection immediately on close (avoid TIME_WAIT)
+            // Immediately reset the socket on close to reduce TIME_WAIT pressure
             client.LingerState = new LingerOption(true, 0);
 
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            // Combine global cancellation with per‑connection timeout
+            using var cts =
+                CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(GlobalContext.Config.TcpTimeoutMs);
 
-            // Attempt connection
+            // Attempt TCP connection
             await client.ConnectAsync(ip, 443, cts.Token);
 
             if (client.Connected)
@@ -62,23 +79,24 @@ public static class ScannerWorkers
 
                 try
                 {
-                    // Pass the connected client to the next stage
-                    await writer.WriteAsync(new LiveConnection(ip, client), ct);
+                    // Pass ownership of the socket to Stage 2
+                    await writer.WriteAsync(
+                        new LiveConnection(ip, client), ct);
                     handedOver = true;
                 }
                 catch
                 {
-                    // Channel might be closed or full; ignore
+                    // Channel closed or cancelled – ignore safely
                 }
             }
         }
         catch
         {
-            // Connection failed or timed out
+            // Connection failed, timed out, or was cancelled
         }
         finally
         {
-            // If we didn't pass the client to the consumer, we must dispose of it here
+            // If ownership was not transferred, clean up locally
             if (!handedOver)
             {
                 GlobalContext.IncrementScannedCount();
@@ -87,13 +105,18 @@ public static class ScannerWorkers
         }
     }
 
-    // ---------------------------------------------------------
-    // Stage 2: Consumer (Heuristic Logic: TLS + HTTP)
-    // ---------------------------------------------------------
+    // ---------------------------------------------------------------------
+    // Stage 2: Consumer (TLS + HTTP Heuristic Detection)
+    // ---------------------------------------------------------------------
 
     /// <summary>
-    /// Consumes connected TCP clients, performs TLS handshake and HTTP checks to identify Cloudflare IPs.
+    /// Consumes live TCP connections and performs TLS handshake
+    /// followed by HTTP-based heuristics to identify Cloudflare edges.
     /// </summary>
+    /// <remarks>
+    /// Includes a single retry with a fresh TCP connection if the
+    /// handed‑over socket fails mid‑processing.
+    /// </remarks>
     public static async Task ConsumerWorker_Heuristic(
         ChannelReader<LiveConnection> reader,
         ChannelWriter<HeuristicResult>? v2rayWriter,
@@ -108,33 +131,43 @@ public static class ScannerWorkers
                     bool success = false;
                     long latency = -1;
 
-                    // Try using the existing connection
+                    // Primary attempt using the handed‑over TCP connection
                     using (var client = item.Client)
                     {
                         try
                         {
                             if (client.Connected)
                             {
-                                (success, latency) = await CheckHeuristicLogic(item.Ip, client);
+                                (success, latency) =
+                                    await CheckHeuristicLogic(client);
                             }
                         }
                         catch { }
                     }
 
-                    // Retry logic: if the initial connection failed/closed, try one more time fresh
+                    // Retry once with a fresh TCP connection if needed
                     if (!success)
                     {
                         try
                         {
-                            using var retryClient = new TcpClient();
-                            retryClient.LingerState = new LingerOption(true, 0);
-                            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                            cts.CancelAfter(GlobalContext.Config.TcpTimeoutMs);
+                            using var retryClient = new TcpClient
+                            {
+                                LingerState = new LingerOption(true, 0)
+                            };
 
-                            await retryClient.ConnectAsync(item.Ip, 443, cts.Token);
+                            using var cts =
+                                CancellationTokenSource
+                                    .CreateLinkedTokenSource(ct);
+                            cts.CancelAfter(
+                                GlobalContext.Config.TcpTimeoutMs);
+
+                            await retryClient.ConnectAsync(
+                                item.Ip, 443, cts.Token);
+
                             if (retryClient.Connected)
                             {
-                                (success, latency) = await CheckHeuristicLogic(item.Ip, retryClient);
+                                (success, latency) =
+                                    await CheckHeuristicLogic(retryClient);
                             }
                         }
                         catch { }
@@ -144,37 +177,49 @@ public static class ScannerWorkers
                     {
                         GlobalContext.IncrementHeuristicPassed();
 
-                        // If V2Ray check is enabled, pass to the next stage
-                        if (GlobalContext.Config.EnableV2RayCheck && v2rayWriter != null)
+                        // Forward to Stage 3 if enabled
+                        if (GlobalContext.Config.EnableV2RayCheck &&
+                            v2rayWriter != null)
                         {
                             try
                             {
-                                await v2rayWriter.WriteAsync(new HeuristicResult(item.Ip, latency), ct);
+                                await v2rayWriter.WriteAsync(
+                                    new HeuristicResult(
+                                        item.Ip, latency),
+                                    ct);
                             }
                             catch { }
                         }
                         else
                         {
-                            // If no V2Ray check, this is a final success
-                            FileUtils.SaveResult(item.Ip.ToString(), latency);
-                            ConsoleInterface.PrintSuccess(item.Ip.ToString(), latency, "HEURISTIC");
+                            // Final success when V2Ray stage is disabled
+                            FileUtils.SaveResult(
+                                item.Ip.ToString(), latency);
+                            ConsoleInterface.PrintSuccess(
+                                item.Ip.ToString(),
+                                latency,
+                                "HEURISTIC");
                         }
                     }
 
-                    // Always increment scanned count when a consumer finishes processing an IP
+                    // Mark this IP as fully processed
                     GlobalContext.IncrementScannedCount();
                 }
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            // Expected during graceful shutdown
+        }
     }
 
-    // ---------------------------------------------------------
-    // Stage 3: V2Ray Consumer (Real Proxy Test)
-    // ---------------------------------------------------------
+    // ---------------------------------------------------------------------
+    // Stage 3: Consumer (Real V2Ray/Xray Verification)
+    // ---------------------------------------------------------------------
 
     /// <summary>
-    /// Consumes IPs that passed the heuristic check and verifies them using a real V2Ray instance.
+    /// Performs real end‑to‑end proxy verification using Xray/V2Ray
+    /// for IPs that passed heuristic detection.
     /// </summary>
     public static async Task ConsumerWorker_V2Ray(
         ChannelReader<HeuristicResult> reader,
@@ -186,73 +231,114 @@ public static class ScannerWorkers
             {
                 while (reader.TryRead(out var item))
                 {
-                    await V2RayController.TestV2RayConnection(item.Ip.ToString(), item.HeuristicLatency);
+                    await V2RayController.TestV2RayConnection(
+                        item.Ip.ToString(),
+                        item.HeuristicLatency);
                 }
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            // Normal termination path
+        }
     }
 
-    // ---------------------------------------------------------
-    // Heuristic Logic Implementation
-    // ---------------------------------------------------------
+    // ---------------------------------------------------------------------
+    // Heuristic Detection Logic
+    // ---------------------------------------------------------------------
 
     /// <summary>
-    /// Performs TLS handshake and sends a HEAD request to detect Cloudflare headers and H3 support.
+    /// Performs a TLS handshake followed by an HTTP HEAD request
+    /// and evaluates Cloudflare-specific response characteristics.
     /// </summary>
-    private static async Task<(bool Success, long Latency)> CheckHeuristicLogic(IPAddress ip, TcpClient client)
+    private static async Task<(bool Success, long Latency)>
+        CheckHeuristicLogic(TcpClient client)
     {
-        // Set timeouts for the heuristic check
-        client.ReceiveTimeout = GlobalContext.Config.HeuristicTotalTimeoutMs;
-        client.SendTimeout = GlobalContext.Config.HeuristicTotalTimeoutMs;
+        client.ReceiveTimeout =
+            GlobalContext.Config.HeuristicTotalTimeoutMs;
+        client.SendTimeout =
+            GlobalContext.Config.HeuristicTotalTimeoutMs;
 
         var sw = Stopwatch.StartNew();
+
         try
         {
             using var netStream = client.GetStream();
 
-            // Validate server certificate (accept any for scanning purposes)
-            using var sslStream = new SslStream(netStream, false, (_, _, _, _) => true);
+            // Certificate validation is intentionally disabled
+            // (scanner context, not a browser security model)
+            using var sslStream =
+                new SslStream(netStream, false,
+                    (_, _, _, _) => true);
 
-            // Generate a random SNI subdomain to avoid caching/blocking
-            string fakeSni = $"{Guid.NewGuid():N}.{GlobalContext.Config.BaseSni}";
+            // Randomized SNI reduces caching and fingerprinting effects
+            string fakeSni =
+                $"{Guid.NewGuid():N}.{GlobalContext.Config.BaseSni}";
 
-            var authOptions = new SslClientAuthenticationOptions
-            {
-                TargetHost = fakeSni,
-                EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
-                ApplicationProtocols = new List<SslApplicationProtocol> { SslApplicationProtocol.Http11 },
-                CertificateRevocationCheckMode = System.Security.Cryptography.X509Certificates.X509RevocationMode.NoCheck
-            };
+            var authOptions =
+                new SslClientAuthenticationOptions
+                {
+                    TargetHost = fakeSni,
+                    EnabledSslProtocols =
+                        SslProtocols.Tls12 | SslProtocols.Tls13,
+                    ApplicationProtocols =
+                        [SslApplicationProtocol.Http11],
+                    CertificateRevocationCheckMode =
+                        System.Security.Cryptography
+                            .X509Certificates
+                            .X509RevocationMode.NoCheck
+                };
 
-            // Perform TLS Handshake with timeout
-            var authTask = sslStream.AuthenticateAsClientAsync(authOptions);
-            if (await Task.WhenAny(authTask, Task.Delay(GlobalContext.Config.TlsTimeoutMs)) != authTask)
+            // TLS handshake with explicit timeout
+            var authTask =
+                sslStream.AuthenticateAsClientAsync(authOptions);
+
+            if (await Task.WhenAny(
+                    authTask,
+                    Task.Delay(
+                        GlobalContext.Config.TlsTimeoutMs))
+                != authTask)
                 return (false, -1);
 
             await authTask;
 
-            // Send HTTP HEAD Request
-            string requestString = $"HEAD / HTTP/1.1\r\nHost: {fakeSni}\r\nUser-Agent: Mozilla/5.0\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n";
-            byte[] requestBytes = Encoding.ASCII.GetBytes(requestString);
-            await sslStream.WriteAsync(requestBytes);
+            // Minimal HTTP HEAD request
+            string request =
+                $"HEAD / HTTP/1.1\r\n" +
+                $"Host: {fakeSni}\r\n" +
+                "User-Agent: Mozilla/5.0\r\n" +
+                "Accept: */*\r\n" +
+                "Accept-Encoding: identity\r\n" +
+                "Connection: close\r\n\r\n";
 
-            // Read Response
-            var buffer = ArrayPool<byte>.Shared.Rent(4096);
+            await sslStream.WriteAsync(
+                Encoding.ASCII.GetBytes(request));
+
+            // Read response headers only
+            var buffer =
+                ArrayPool<byte>.Shared.Rent(4096);
             var sb = new StringBuilder();
-            using var readCts = new CancellationTokenSource(GlobalContext.Config.HttpReadTimeoutMs);
+
+            using var readCts =
+                new CancellationTokenSource(
+                    GlobalContext.Config.HttpReadTimeoutMs);
 
             try
             {
                 while (!readCts.IsCancellationRequested)
                 {
-                    int read = await sslStream.ReadAsync(buffer, readCts.Token);
+                    int read =
+                        await sslStream.ReadAsync(
+                            buffer, readCts.Token);
+
                     if (read <= 0) break;
 
-                    sb.Append(Encoding.ASCII.GetString(buffer, 0, read));
+                    sb.Append(
+                        Encoding.ASCII.GetString(
+                            buffer, 0, read));
 
-                    // Stop if headers are fully received
-                    if (sb.ToString().Contains("\r\n\r\n")) break;
+                    if (sb.ToString().Contains("\r\n\r\n"))
+                        break;
                 }
             }
             catch (OperationCanceledException) { }
@@ -264,14 +350,19 @@ public static class ScannerWorkers
             sw.Stop();
             string headers = sb.ToString();
 
-            // Validation Checks
-            if (string.IsNullOrWhiteSpace(headers) || !headers.StartsWith("HTTP/", StringComparison.OrdinalIgnoreCase))
+            // Basic HTTP sanity check
+            if (string.IsNullOrWhiteSpace(headers) ||
+                !headers.StartsWith(
+                    "HTTP/",
+                    StringComparison.OrdinalIgnoreCase))
                 return (false, -1);
 
-            int cfScore = GetCloudflareHeaderScore(headers);
-            bool hasH3 = HasAltSvcH3(headers);
+            int cfScore =
+                GetCloudflareHeaderScore(headers);
+            bool hasH3 =
+                HasAltSvcH3(headers);
 
-            // Criteria: Must have Cloudflare headers AND support HTTP/3
+            // Final heuristic decision
             if (cfScore < 2) return (false, -1);
             if (!hasH3) return (false, -1);
 
@@ -284,22 +375,30 @@ public static class ScannerWorkers
     }
 
     /// <summary>
-    /// Calculates a score based on the presence of Cloudflare-specific HTTP headers.
+    /// Computes a heuristic score based on the presence of
+    /// Cloudflare-specific HTTP response headers.
     /// </summary>
     private static int GetCloudflareHeaderScore(string headers)
     {
         int score = 0;
-        if (headers.Contains("cf-ray:", StringComparison.OrdinalIgnoreCase)) score++;
-        if (headers.Contains("server: cloudflare", StringComparison.OrdinalIgnoreCase)) score++;
-        if (headers.Contains("cf-cache-status:", StringComparison.OrdinalIgnoreCase)) score++;
-        if (headers.Contains("cf-request-id:", StringComparison.OrdinalIgnoreCase)) score++;
+        if (headers.Contains("cf-ray:",
+            StringComparison.OrdinalIgnoreCase)) score++;
+        if (headers.Contains("server: cloudflare",
+            StringComparison.OrdinalIgnoreCase)) score++;
+        if (headers.Contains("cf-cache-status:",
+            StringComparison.OrdinalIgnoreCase)) score++;
+        if (headers.Contains("cf-request-id:",
+            StringComparison.OrdinalIgnoreCase)) score++;
         return score;
     }
 
     /// <summary>
-    /// Checks if the Alt-Svc header indicates HTTP/3 support.
+    /// Determines whether the response advertises HTTP/3 support
+    /// via the Alt‑Svc header.
     /// </summary>
-    private static bool HasAltSvcH3(string headers)
-        => headers.Contains("alt-svc:", StringComparison.OrdinalIgnoreCase) &&
-           headers.Contains("h3", StringComparison.OrdinalIgnoreCase);
+    private static bool HasAltSvcH3(string headers) =>
+        headers.Contains("alt-svc:",
+            StringComparison.OrdinalIgnoreCase) &&
+        headers.Contains("h3",
+            StringComparison.OrdinalIgnoreCase);
 }

@@ -1,390 +1,77 @@
-﻿using System.Net;
-using System.Threading.Channels;
-using CFScanner;
+﻿using CFScanner;
 using CFScanner.Core;
 using CFScanner.UI;
 using CFScanner.Utils;
 
-// -------------------------------------------------------------------
-// Active VPN/PROXY Check
-// -------------------------------------------------------------------
-if (VpnDetector.ShouldWarn())
-{
-    Console.ForegroundColor = ConsoleColor.Yellow;
-    Console.WriteLine("\nWARNING: Potential VPN or Proxy connection detected.");
-    Console.WriteLine("Scanning through a VPN may cause abuse reports or IP bans.");
-    Console.WriteLine("It is recommended to disable it before scanning to use your direct connection.");
-    Console.ForegroundColor = ConsoleColor.DarkCyan;
-    Console.WriteLine("Press Y to continue, any other key to exit.");
-    Console.ResetColor();
-    var key = Console.ReadKey(true);
-    if (key.Key != ConsoleKey.Y)
-    {
-        Environment.Exit(0);
-    }
-}
-// -------------------------------------------------------------------
-// Global cancellation and Ctrl+C handler
-// -------------------------------------------------------------------
-Console.CancelKeyPress += (s, e) =>
-{
-    ConsoleInterface.HideStatusLine();
-    Console.ForegroundColor = ConsoleColor.DarkYellow;
-    Console.WriteLine("\n[Info] Cancellation requested. Waiting for running tasks to finish...");
-    Console.ResetColor();
-    GlobalContext.Cts.Cancel();
-    e.Cancel = true; // Keep the application alive while we clean up.
-};
+// -------------------------------------------------------------------------
+// Application Entry Point (Top-Level Program)
+// This file defines the full startup and execution flow of CFScanner.
+// -------------------------------------------------------------------------
 
-// -------------------------------------------------------------------
-// Argument parsing
-// -------------------------------------------------------------------
-if (!ArgParser.ParseArguments(args))
-    return; // Help was printed or invalid arguments.
-
-// -------------------------------------------------------------------
-// Validate input files, ASN DB, V2Ray config etc.
-// -------------------------------------------------------------------
-if (!ValidateInputs())
+// 1. Pre-flight check: warn about VPN/Proxy usage
+// Running the scanner behind a VPN or proxy may cause abuse reports
+// or unreliable results.
+if (!AppValidator.CheckVpnRisk())
     return;
 
-// -------------------------------------------------------------------
-// Stage 3 (Xray) initialization if enabled
-// -------------------------------------------------------------------
+// 2. Register global cancellation handler (Ctrl+C)
+// Ensures a graceful shutdown across all worker threads.
+CancellationManager.Setup();
+
+// 3. Parse command-line arguments
+// Populates GlobalContext.Config and validates basic syntax.
+if (!ArgParser.ParseArguments(args))
+    return;
+
+// 4. Validate user inputs and environment
+// Checks input files, ASN database availability, and permissions.
+if (!AppValidator.ValidateInputs())
+    return;
+
+// 5. Initialize Xray/V2Ray (optional)
+// Downloads binary if missing and validates the user-provided config.
 if (GlobalContext.Config.EnableV2RayCheck)
 {
-    string? xrayPath = ResolveXrayExecutable();
-    if (xrayPath == null)
-    {
-        ConsoleInterface.PrintError("Xray executable not found.");
-        Console.WriteLine(" Xray is required for V2Ray verification.");
-        Console.WriteLine(" Please download Xray from https://github.com/XTLS/Xray-core/releases/");
+    if (!await XraySetup.InitializeAsync())
         return;
-    }
-
-    if (!EnsureExecutablePermission(xrayPath))
-    {
-        ConsoleInterface.PrintError("Xray exists but is not executable.");
-        Console.WriteLine($" Please run: chmod +x \"{xrayPath}\"");
-        return;
-    }
-
-    Defaults.XrayExeName = xrayPath;
-
-    if (!await V2RayController.ValidateXrayConfigAsync(GlobalContext.Config.V2RayConfigPath!))
-    {
-        ConsoleInterface.PrintError("Xray configuration validation failed.");
-        return;
-    }
-
-    GlobalContext.RawV2RayTemplate = await File.ReadAllTextAsync(GlobalContext.Config.V2RayConfigPath!);
 }
 
-// -------------------------------------------------------------------
-// Prepare output file and print header
-// -------------------------------------------------------------------
+// 6. Prepare output file and print application header
+// Output file is created early to catch permission issues.
 FileUtils.SetupOutputFile();
 ConsoleInterface.PrintHeader();
 
-// -------------------------------------------------------------------
-// Build IP exclusion list (files, CIDRs, ASNs)
-// -------------------------------------------------------------------
-if (GlobalContext.Config.ExcludeFiles.Count > 0 ||
-    GlobalContext.Config.ExcludeCidrs.Count > 0 ||
-    GlobalContext.Config.ExcludeAsns.Count > 0)
+// 7. Load exclusions and scan targets
+// Builds exclusion filters first, then resolves input sources.
+await InputLoader.BuildExclusionsAsync();
+var (ipSource, totalIps, isInfinite) =
+    await InputLoader.LoadTargetsAsync();
+
+// 8. Configure global scan mode
+// Used by UI, progress reporting, and final statistics.
+GlobalContext.TotalIps = totalIps;
+GlobalContext.IsInfiniteMode = isInfinite;
+
+// Abort if no targets were resolved in fixed-range mode
+if (totalIps == 0 && !isInfinite)
 {
-    Console.WriteLine("[Init] Building exclusion list...");
-    await GlobalContext.IpFilter.BuildAsync(
-        GlobalContext.Config.ExcludeFiles,
-        GlobalContext.Config.ExcludeCidrs,
-        GlobalContext.Config.ExcludeAsns,
-        GlobalContext.Config.AsnDbPath);
-    if (GlobalContext.IpFilter.RangeCount > 0)
-        Console.WriteLine($"[Init] Blocked IPs: {GlobalContext.IpFilter.RangeCount:N0} ranges loaded.");
+    ConsoleInterface.PrintError(
+        "No IPs found to scan (check inputs or exclusions).");
+    return;
 }
 
-// -------------------------------------------------------------------
-// Load all input sources (file, ASN, inline CIDR)
-// -------------------------------------------------------------------
-var inputIps = new List<IPAddress>();
-bool specificInputProvided = false;
+// 9. Run the scanning engine
+// This call blocks until the scan completes or is cancelled.
+await ScanEngine.RunScanAsync(ipSource);
 
-if (GlobalContext.Config.InputFiles.Count > 0)
-{
-    specificInputProvided = true;
-    foreach (var file in GlobalContext.Config.InputFiles)
-    {
-        Console.Write($"Loading file {Path.GetFileName(file)}... ");
-        inputIps.AddRange(await FileUtils.LoadIpsAsync(file));
-        Console.WriteLine("Done.");
-    }
-}
-
-if (GlobalContext.Config.InputAsns.Count > 0)
-{
-    specificInputProvided = true;
-    Console.Write($"Loading ASNs ({string.Join(",", GlobalContext.Config.InputAsns)})... ");
-    inputIps.AddRange(IpFilter.IpAsnSource.GetIps(GlobalContext.Config.AsnDbPath, GlobalContext.Config.InputAsns));
-    Console.WriteLine("Done.");
-}
-
-if (GlobalContext.Config.InputCidrs.Count > 0)
-{
-    specificInputProvided = true;
-    Console.Write("Loading inline IPs/CIDRs... ");
-
-    foreach (var entry in GlobalContext.Config.InputCidrs)
-    {
-        var parts = entry.Split(',',
-            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        foreach (var part in parts)
-        {
-            var ips = NetUtils.ExpandCidr(part).ToList();
-            if (ips.Count == 0)
-            {
-                ConsoleInterface.PrintError($"Invalid IP or CIDR: {part}");
-                continue;
-            }
-
-            inputIps.AddRange(ips);
-        }
-    }
-
-    Console.WriteLine("Done.");
-}
-
-// -------------------------------------------------------------------
-// Determine scan mode: fixed list or infinite random
-// -------------------------------------------------------------------
-IEnumerable<IPAddress> ipSource;
-if (specificInputProvided)
-{
-    // Remove duplicates and apply exclusions
-    var distinct = inputIps.Distinct().Where(ip => !GlobalContext.IpFilter.IsBlocked(ip)).ToList();
-    GlobalContext.TotalIps = distinct.Count;
-    if (GlobalContext.TotalIps == 0)
-    {
-        Console.WriteLine("[Error] No IPs found to scan (check inputs or exclusions).");
-        return;
-    }
-
-    Console.WriteLine($"[Mode] Fixed Range Scanner | Total IPs: {GlobalContext.TotalIps:N0}");
-
-    if (GlobalContext.Config.Shuffle)
-    {
-        Console.WriteLine("[Info] Shuffling IPs...");
-        NetUtils.ShuffleList(distinct);
-    }
-
-    ipSource = distinct;
-    GlobalContext.IsInfiniteMode = false;
-}
-else
-{
-    Console.WriteLine("[Mode] Random IPv4 Scanner (Infinite)");
-    if (GlobalContext.IpFilter.RangeCount == 0)
-        Console.WriteLine("[Warning] No exclusions set! Scanning ALL internet.");
-
-    GlobalContext.TotalIps = -1;
-    GlobalContext.IsInfiniteMode = true;
-    ipSource = NetUtils.GenerateRandomIps();
-}
-
-if (GlobalContext.Config.EnableV2RayCheck)
-    Console.WriteLine($"[Mode] V2Ray Verification ENABLED (Workers: {GlobalContext.Config.V2RayWorkers})");
-
-Console.WriteLine(new string('-', 60));
-GlobalContext.Stopwatch.Start();
-
-// -------------------------------------------------------------------
-// Create channels for inter-stage communication
-// -------------------------------------------------------------------
-var tcpChannel = Channel.CreateBounded<ScannerWorkers.LiveConnection>(
-    new BoundedChannelOptions(GlobalContext.Config.TcpChannelBuffer)
-    {
-        SingleWriter = false,
-        SingleReader = false,
-        FullMode = BoundedChannelFullMode.Wait
-    });
-
-Channel<ScannerWorkers.HeuristicResult>? v2rayChannel = null;
-if (GlobalContext.Config.EnableV2RayCheck)
-{
-    v2rayChannel = Channel.CreateBounded<ScannerWorkers.HeuristicResult>(
-        new BoundedChannelOptions(GlobalContext.Config.V2RayChannelBuffer)
-        {
-            SingleWriter = false,
-            SingleReader = false,
-            FullMode = BoundedChannelFullMode.Wait
-        });
-}
-
-// -------------------------------------------------------------------
-// Start the UI monitor (status line)
-// -------------------------------------------------------------------
-var monitorTask = Task.Run(() => ConsoleInterface.MonitorUi(tcpChannel.Reader, v2rayChannel?.Reader, GlobalContext.Cts.Token));
-
-// -------------------------------------------------------------------
-// Stage 2 workers (TLS+HTTP heuristic)
-// -------------------------------------------------------------------
-var heuristicTasks = new Task[GlobalContext.Config.HeuristicWorkers];
-for (int i = 0; i < GlobalContext.Config.HeuristicWorkers; i++)
-    heuristicTasks[i] = Task.Run(() =>
-        ScannerWorkers.ConsumerWorker_Heuristic(tcpChannel.Reader, v2rayChannel?.Writer, GlobalContext.Cts.Token));
-
-// -------------------------------------------------------------------
-// Stage 3 workers (Xray real proxy test)
-// -------------------------------------------------------------------
-Task[] v2rayTasks = [];
-if (GlobalContext.Config.EnableV2RayCheck && v2rayChannel != null)
-{
-    v2rayTasks = new Task[GlobalContext.Config.V2RayWorkers];
-    for (int i = 0; i < GlobalContext.Config.V2RayWorkers; i++)
-        v2rayTasks[i] = Task.Run(() =>
-            ScannerWorkers.ConsumerWorker_V2Ray(v2rayChannel.Reader, GlobalContext.Cts.Token));
-}
-
-// -------------------------------------------------------------------
-// Stage 1 producer (TCP connect to port 443)
-// -------------------------------------------------------------------
-try
-{
-    await Parallel.ForEachAsync(ipSource, new ParallelOptions
-    {
-        MaxDegreeOfParallelism = GlobalContext.Config.TcpWorkers,
-        CancellationToken = GlobalContext.Cts.Token
-    }, async (ip, ct) => await ScannerWorkers.ProducerWorker(ip, tcpChannel.Writer, ct));
-}
-catch (OperationCanceledException)
-{
-    // Expected when cancellation is requested.
-}
-
-// -------------------------------------------------------------------
-// Signal completion of channels and wait for workers
-// -------------------------------------------------------------------
-tcpChannel.Writer.Complete();
-await Task.WhenAll(heuristicTasks);
-
-if (v2rayChannel != null)
-{
-    v2rayChannel.Writer.Complete();
-    await Task.WhenAll(v2rayTasks);
-}
-
-// -------------------------------------------------------------------
-// Stop monitor and finalize
-// -------------------------------------------------------------------
-GlobalContext.Cts.Cancel();
-try { await monitorTask; } catch { }
-ConsoleInterface.HideStatusLine();
-GlobalContext.Stopwatch.Stop();
-
+// 10. Finalize results and print summary
+// Optionally sorts output and prints final statistics.
 FileUtils.SortResultsFile();
-ConsoleInterface.PrintFinalReport(GlobalContext.Stopwatch.Elapsed);
+ConsoleInterface.PrintFinalReport(
+    GlobalContext.Stopwatch.Elapsed);
 
+// -------------------------------------------------------------------------
+// Graceful Exit
+// -------------------------------------------------------------------------
 Console.WriteLine("\nPress any key to exit...");
 Console.ReadKey();
-
-// -------------------------------------------------------------------
-// Local helper functions
-// -------------------------------------------------------------------
-
-static string? ResolveXrayExecutable()
-{
-    string baseDir = AppContext.BaseDirectory;
-    if (OperatingSystem.IsWindows())
-    {
-        string winPath = Path.Combine(baseDir, "xray.exe");
-        if (File.Exists(winPath)) return winPath;
-    }
-    string unixPath = Path.Combine(baseDir, "xray");
-    if (File.Exists(unixPath)) return unixPath;
-    return null;
-}
-
-static bool EnsureExecutablePermission(string path)
-{
-    if (OperatingSystem.IsWindows()) return true;
-    try
-    {
-        var mode = File.GetUnixFileMode(path);
-        bool isExecutable = mode.HasFlag(UnixFileMode.UserExecute) ||
-                            mode.HasFlag(UnixFileMode.GroupExecute) ||
-                            mode.HasFlag(UnixFileMode.OtherExecute);
-        return isExecutable;
-    }
-    catch { return false; }
-}
-
-static bool ValidateInputs()
-{
-    bool hasError = false;
-
-    // Input files
-    foreach (var file in GlobalContext.Config.InputFiles)
-    {
-        if (!File.Exists(file))
-        {
-            ConsoleInterface.PrintError($"Input file not found: {file}");
-            hasError = true;
-        }
-    }
-
-    // Exclude files
-    foreach (var file in GlobalContext.Config.ExcludeFiles)
-    {
-        if (!File.Exists(file))
-        {
-            ConsoleInterface.PrintError($"Exclude file not found: {file}");
-            hasError = true;
-        }
-    }
-
-    // V2Ray config validation
-    if (GlobalContext.Config.EnableV2RayCheck)
-    {
-        if (!File.Exists(GlobalContext.Config.V2RayConfigPath!))
-        {
-            ConsoleInterface.PrintError($"V2Ray Config file not found: {GlobalContext.Config.V2RayConfigPath}");
-            hasError = true;
-        }
-        else
-        {
-            string content = File.ReadAllText(GlobalContext.Config.V2RayConfigPath!);
-            if (!content.Contains("IP.IP.IP.IP"))
-            {
-                ConsoleInterface.PrintError("V2Ray config file must contain the placeholder 'IP.IP.IP.IP'.");
-                hasError = true;
-            }
-        }
-    }
-
-    // ASN database
-    bool usesAsn = GlobalContext.Config.InputAsns.Count > 0 || GlobalContext.Config.ExcludeAsns.Count > 0;
-    if (usesAsn && !File.Exists(GlobalContext.Config.AsnDbPath))
-    {
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine($"[Warning] ASN database not found: {GlobalContext.Config.AsnDbPath}");
-        Console.Write(" Do you want to download it now from iptoasn.com? [Y/n]: ");
-        Console.ResetColor();
-
-        string? answer = Console.ReadLine()?.Trim().ToLowerInvariant();
-        if (answer == "" || answer == "y" || answer == "yes")
-        {
-            if (!FileUtils.DownloadAndExtractAsnDb(GlobalContext.Config.AsnDbPath))
-            {
-                ConsoleInterface.PrintError("Failed to download or extract ASN database.");
-                hasError = true;
-            }
-        }
-        else
-        {
-            ConsoleInterface.PrintError("ASN database is required for -a or -xa switches.");
-            hasError = true;
-        }
-    }
-
-    return !hasError;
-}

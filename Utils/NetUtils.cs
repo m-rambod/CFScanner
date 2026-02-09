@@ -25,22 +25,23 @@ public static class NetUtils
         }
     }
 
-    /// <summary>
-    /// Expands a CIDR notation string into individual IPv4 addresses.
-    /// Limits expansion to <see cref="Defaults.CidrExpandCap"/> to avoid excessive memory usage.
-    /// </summary>
-    /// <param name="cidr">CIDR string (e.g., "192.168.0.0/24").</param>
-    /// <returns>Enumerable of IPAddress objects.</returns>
     public static IEnumerable<IPAddress> ExpandCidr(string input)
     {
-        // 1) Single IP
+        // ---------------------------------------------------------------------
+        // 1) Single IP shortcut
+        // ---------------------------------------------------------------------
+        // If the input is a valid IPv4 address, return it directly
+        // and skip CIDR expansion logic.
         if (IPAddress.TryParse(input, out var singleIp))
         {
             yield return singleIp;
             yield break;
         }
 
-        // 2) CIDR
+        // ---------------------------------------------------------------------
+        // 2) CIDR parsing and validation
+        // ---------------------------------------------------------------------
+        // Expected format: <IPv4>/<mask>
         var parts = input.Split('/');
         if (parts.Length != 2 ||
             !IPAddress.TryParse(parts[0], out var ip) ||
@@ -48,15 +49,46 @@ public static class NetUtils
             mask < 0 || mask > 32)
             yield break;
 
+        // Convert IP to uint for arithmetic operations
         byte[] bytes = ip.GetAddressBytes();
         if (BitConverter.IsLittleEndian)
             Array.Reverse(bytes);
 
         uint start = BitConverter.ToUInt32(bytes, 0);
-        uint count = (uint)(1ul << (32 - mask));
-        count = Math.Min(count, Defaults.CidrExpandCap);
 
-        for (uint i = 0; i < count; i++)
+        // ---------------------------------------------------------------------
+        // 3) CIDR expansion with safety cap
+        // ---------------------------------------------------------------------
+        // Calculate total number of IPs in the CIDR block.
+        // ulong is used to safely handle very large ranges (e.g. /0).
+        ulong totalCount = 1UL << (32 - mask);
+
+        // Limit expansion to a configurable maximum to prevent
+        // excessive memory usage and long scan times.
+        uint cappedCount = (uint)Math.Min(
+            totalCount,
+            Defaults.CidrExpandCap);
+
+        // ---------------------------------------------------------------------
+        // 4) User warning for oversized CIDR ranges
+        // ---------------------------------------------------------------------
+        // Inform the user that only a subset of the CIDR will be scanned,
+        // while allowing the scan to continue normally.
+        if (totalCount > Defaults.CidrExpandCap)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine(
+                $"\n[Warning] CIDR '{input}' contains {totalCount:N0} IPs. " +
+                $"Only the first {Defaults.CidrExpandCap:N0} IPs will be scanned.");
+            Console.ResetColor();
+        }
+
+        // ---------------------------------------------------------------------
+        // 5) IP generation loop
+        // ---------------------------------------------------------------------
+        // Sequentially generate IP addresses starting from the
+        // network base address, up to the capped limit.
+        for (uint i = 0; i < cappedCount; i++)
         {
             var newBytes = BitConverter.GetBytes(start + i);
             if (BitConverter.IsLittleEndian)

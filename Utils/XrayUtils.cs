@@ -1,16 +1,41 @@
-﻿namespace CFScanner.Utils;
+﻿using CFScanner.Core;
+using CFScanner.UI;
 
-/// <summary>
-/// Utility methods for locating and verifying the Xray executable.
-/// </summary>
-public static class XrayUtils
+namespace CFScanner.Utils;
+
+public static class XraySetup
 {
-    /// <summary>
-    /// Attempts to locate the Xray executable in the application's base directory.
-    /// Checks for platform-specific filenames (xray.exe on Windows, xray on Unix).
-    /// </summary>
-    /// <returns>Full path to the executable if found; otherwise, null.</returns>
-    public static string? ResolveXrayExecutable()
+    public static async Task<bool> InitializeAsync()
+    {
+        string? xrayPath = ResolveXrayExecutable();
+        if (xrayPath == null)
+        {
+            ConsoleInterface.PrintError("Xray executable not found.");
+            Console.WriteLine(" Xray is required for V2Ray verification.");
+            Console.WriteLine(" Please download Xray from https://github.com/XTLS/Xray-core/releases/");
+            return false;
+        }
+
+        if (!EnsureExecutablePermission(xrayPath))
+        {
+            ConsoleInterface.PrintError("Xray exists but is not executable.");
+            Console.WriteLine($" Please run: chmod +x \"{xrayPath}\"");
+            return false;
+        }
+
+        Defaults.XrayExeName = xrayPath;
+
+        if (!await V2RayController.ValidateXrayConfigAsync(GlobalContext.Config.V2RayConfigPath!))
+        {
+            ConsoleInterface.PrintError("Xray configuration validation failed.");
+            return false;
+        }
+
+        GlobalContext.RawV2RayTemplate = await File.ReadAllTextAsync(GlobalContext.Config.V2RayConfigPath!);
+        return true;
+    }
+
+    private static string? ResolveXrayExecutable()
     {
         string baseDir = AppContext.BaseDirectory;
         if (OperatingSystem.IsWindows())
@@ -23,27 +48,16 @@ public static class XrayUtils
         return null;
     }
 
-    /// <summary>
-    /// Ensures the given file has executable permissions on Unix-like systems.
-    /// On Windows this check is skipped and always returns true.
-    /// </summary>
-    /// <param name="path">Path to the executable.</param>
-    /// <returns>True if the file is executable or the platform is Windows; otherwise false.</returns>
-    public static bool EnsureExecutablePermission(string path)
+    private static bool EnsureExecutablePermission(string path)
     {
         if (OperatingSystem.IsWindows()) return true;
         try
         {
-            // FileInfo is not needed for GetUnixFileMode; we keep it for potential future use.
             var mode = File.GetUnixFileMode(path);
-            bool isExecutable = mode.HasFlag(UnixFileMode.UserExecute) ||
-                                mode.HasFlag(UnixFileMode.GroupExecute) ||
-                                mode.HasFlag(UnixFileMode.OtherExecute);
-            return isExecutable;
+            return mode.HasFlag(UnixFileMode.UserExecute) ||
+                   mode.HasFlag(UnixFileMode.GroupExecute) ||
+                   mode.HasFlag(UnixFileMode.OtherExecute);
         }
-        catch
-        {
-            return false;
-        }
+        catch { return false; }
     }
 }
