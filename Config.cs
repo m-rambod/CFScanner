@@ -45,14 +45,14 @@ public static class Defaults
 public class Config
 {
     // Input sources
-    public List<string> InputFiles { get; set; } = new();
-    public List<string> InputAsns { get; set; } = new();
-    public List<string> InputCidrs { get; set; } = new();
+    public List<string> InputFiles { get; set; } = [];
+    public List<string> InputAsns { get; set; } = [];
+    public List<string> InputCidrs { get; set; } = [];
 
     // Exclusion sources
-    public List<string> ExcludeFiles { get; set; } = new();
-    public List<string> ExcludeAsns { get; set; } = new();
-    public List<string> ExcludeCidrs { get; set; } = new();
+    public List<string> ExcludeFiles { get; set; } = [];
+    public List<string> ExcludeAsns { get; set; } = [];
+    public List<string> ExcludeCidrs { get; set; } = [];
 
     // General settings
     public string AsnDbPath { get; set; } = Defaults.AsnDbPath;

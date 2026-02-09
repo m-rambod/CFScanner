@@ -39,9 +39,7 @@ public static class FileUtils
     public static void SortResultsFile()
     {
         if (!GlobalContext.Config.SortResults ||
-            !GlobalContext.Config.SaveLatency ||
-            !File.Exists(GlobalContext.OutputFilePath) ||
-            GlobalContext.V2RayPassed == 0)
+            !File.Exists(GlobalContext.OutputFilePath))
             return;
 
         Console.WriteLine("\n[Info] Sorting results by latency...");

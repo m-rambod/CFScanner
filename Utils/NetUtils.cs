@@ -31,17 +31,28 @@ public static class NetUtils
     /// </summary>
     /// <param name="cidr">CIDR string (e.g., "192.168.0.0/24").</param>
     /// <returns>Enumerable of IPAddress objects.</returns>
-    public static IEnumerable<IPAddress> ExpandCidr(string cidr)
+    public static IEnumerable<IPAddress> ExpandCidr(string input)
     {
-        var parts = cidr.Split('/');
-        if (parts.Length != 2 || !IPAddress.TryParse(parts[0], out var ip) || !int.TryParse(parts[1], out int mask))
+        // 1) Single IP
+        if (IPAddress.TryParse(input, out var singleIp))
+        {
+            yield return singleIp;
+            yield break;
+        }
+
+        // 2) CIDR
+        var parts = input.Split('/');
+        if (parts.Length != 2 ||
+            !IPAddress.TryParse(parts[0], out var ip) ||
+            !int.TryParse(parts[1], out int mask) ||
+            mask < 0 || mask > 32)
             yield break;
 
         byte[] bytes = ip.GetAddressBytes();
         if (BitConverter.IsLittleEndian)
             Array.Reverse(bytes);
-        uint start = BitConverter.ToUInt32(bytes, 0);
 
+        uint start = BitConverter.ToUInt32(bytes, 0);
         uint count = (uint)(1ul << (32 - mask));
         count = Math.Min(count, Defaults.CidrExpandCap);
 
@@ -50,6 +61,7 @@ public static class NetUtils
             var newBytes = BitConverter.GetBytes(start + i);
             if (BitConverter.IsLittleEndian)
                 Array.Reverse(newBytes);
+
             yield return new IPAddress(newBytes);
         }
     }

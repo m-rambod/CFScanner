@@ -131,11 +131,26 @@ if (GlobalContext.Config.InputAsns.Count > 0)
 if (GlobalContext.Config.InputCidrs.Count > 0)
 {
     specificInputProvided = true;
-    Console.Write("Loading inline CIDRs... ");
-    foreach (var cidr in GlobalContext.Config.InputCidrs)
+    Console.Write("Loading inline IPs/CIDRs... ");
+
+    foreach (var entry in GlobalContext.Config.InputCidrs)
     {
-        inputIps.AddRange(NetUtils.ExpandCidr(cidr));
+        var parts = entry.Split(',',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        foreach (var part in parts)
+        {
+            var ips = NetUtils.ExpandCidr(part).ToList();
+            if (ips.Count == 0)
+            {
+                ConsoleInterface.PrintError($"Invalid IP or CIDR: {part}");
+                continue;
+            }
+
+            inputIps.AddRange(ips);
+        }
     }
+
     Console.WriteLine("Done.");
 }
 
