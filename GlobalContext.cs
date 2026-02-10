@@ -49,7 +49,7 @@ public static class GlobalContext
     // Kept private to enforce atomic updates via Interlocked
     private static int _scannedCount;
     private static long _tcpOpenTotal;
-    private static int _heuristicPassed;
+    private static int _signaturePassed;
     private static int _v2RayPassed;
 
     // Scan mode flags and shared resources
@@ -90,9 +90,9 @@ public static class GlobalContext
     public static long TcpOpenTotal => _tcpOpenTotal;
 
     /// <summary>
-    /// Number of IPs that passed the heuristic TLS/HTTP checks.
+    /// Number of IPs that passed the signature TLS/HTTP checks.
     /// </summary>
-    public static int HeuristicPassed => _heuristicPassed;
+    public static int SignaturePassed => _signaturePassed;
 
     /// <summary>
     /// Number of IPs that passed real Xray/V2Ray proxy verification.
@@ -140,10 +140,10 @@ public static class GlobalContext
         Interlocked.Increment(ref _tcpOpenTotal);
 
     /// <summary>
-    /// Atomically increments the number of heuristic-passed IPs.
+    /// Atomically increments the number of signature-passed IPs.
     /// </summary>
-    public static void IncrementHeuristicPassed() =>
-        Interlocked.Increment(ref _heuristicPassed);
+    public static void IncrementSignaturePassed() =>
+        Interlocked.Increment(ref _signaturePassed);
 
     /// <summary>
     /// Atomically increments the number of V2Ray-verified IPs.

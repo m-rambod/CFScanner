@@ -1,4 +1,5 @@
-﻿using System.Buffers.Binary;
+﻿using CFScanner.UI;
+using System.Buffers.Binary;
 using System.Net;
 
 namespace CFScanner.Utils;
@@ -76,11 +77,11 @@ public static class NetUtils
         // while allowing the scan to continue normally.
         if (totalCount > Defaults.CidrExpandCap)
         {
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine(
-                $"\n[Warning] CIDR '{input}' contains {totalCount:N0} IPs. " +
-                $"Only the first {Defaults.CidrExpandCap:N0} IPs will be scanned.");
-            Console.ResetColor();
+            ConsoleInterface.PrintWarning(
+                    $"CIDR '{input}' contains {totalCount:N0} IPs. " +
+                    $"Only the first {Defaults.CidrExpandCap:N0} IPs will be scanned."
+                    , prependNewLine: true
+                );
         }
 
         // ---------------------------------------------------------------------

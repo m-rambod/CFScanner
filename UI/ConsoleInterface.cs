@@ -53,13 +53,57 @@ public static class ConsoleInterface
     }
 
     /// <summary>
-    /// Prints a successful verification line (heuristic or real proxy test).
+    /// Prints a warning message in yellow.
+    /// Optionally asks the user for confirmation.
+    /// If confirmation is required, only 'Y' or 'y' returns true.
+    /// Any other key returns false.
+    /// </summary>
+    /// <param name="msg">
+    /// Warning message to display.
+    /// </param>
+    /// <param name="requireConfirmation">
+    /// If true, prompts the user to confirm by pressing 'Y'.
+    /// </param>
+    /// <param name="prependNewLine">
+    /// If true, prints an empty line before the warning message.
+    /// Useful for visual separation from previous output.
+    /// </param>
+    /// <returns>
+    /// True if execution should continue; otherwise false.
+    /// </returns>
+    public static bool PrintWarning(
+        string msg,
+        bool requireConfirmation = false,
+        bool prependNewLine = false)
+    {
+        if (prependNewLine)
+            Console.WriteLine();
+
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine($"[Warning] {msg}");
+        Console.ResetColor();
+
+        if (!requireConfirmation || Console.IsInputRedirected)
+            return true;
+
+        Console.ForegroundColor = ConsoleColor.DarkCyan;
+        Console.Write("Continue? Press 'Y' to proceed, any other key to cancel: ");
+        Console.ResetColor();
+
+        var key = Console.ReadKey(intercept: true);
+        Console.WriteLine();
+
+        return char.ToUpperInvariant(key.KeyChar) == 'Y';
+    }
+
+    /// <summary>
+    /// Prints a successful verification line (signature or real proxy test).
     /// Ensures the live status line is temporarily cleared and then restored
     /// to prevent console corruption.
     /// </summary>
     /// <param name="ip">The verified IP address.</param>
     /// <param name="latency">Measured latency in milliseconds.</param>
-    /// <param name="type">Stage identifier (e.g. HEURISTIC, REAL-XRAY).</param>
+    /// <param name="type">Stage identifier (e.g. SIGNATURE, REAL-XRAY).</param>
     public static void PrintSuccess(string ip, long latency, string type)
     {
         lock (ConsoleLock)
@@ -109,7 +153,7 @@ public static class ConsoleInterface
         Console.WriteLine("\n══════════════════════════════════");
         Console.WriteLine($" Total IPs        : {(GlobalContext.IsInfiniteMode ? "Infinite" : GlobalContext.TotalIps.ToString("N0"))}");
         Console.WriteLine($" Scanned          : {GlobalContext.ScannedCount:N0}");
-        Console.WriteLine($" Heuristic Passed : {GlobalContext.HeuristicPassed:N0}");
+        Console.WriteLine($" Signature Passed : {GlobalContext.SignaturePassed:N0}");
         Console.WriteLine($" V2Ray Verified   : {GlobalContext.V2RayPassed:N0}");
         Console.WriteLine($" Duration         : {totalTime:hh\\:mm\\:ss}");
 
@@ -157,7 +201,7 @@ public static class ConsoleInterface
     /// </param>
     public static async Task MonitorUi(
         ChannelReader<ScannerWorkers.LiveConnection> tcpReader,
-        ChannelReader<ScannerWorkers.HeuristicResult>? v2rayReader,
+        ChannelReader<ScannerWorkers.SignatureResult>? v2rayReader,
         CancellationToken token)
     {
         try
@@ -215,7 +259,7 @@ public static class ConsoleInterface
                     $"[Prog {progressStr}] " +
                     $"[Speed {speed:F0} ip/s] " +
                     $"[Open {GlobalContext.TcpOpenTotal:N0}] " +
-                    $"[Heur {GlobalContext.HeuristicPassed:N0}] " +
+                    $"[Sign {GlobalContext.SignaturePassed:N0}] " +
                     (GlobalContext.Config.EnableV2RayCheck
                         ? $"[V2Ray {GlobalContext.V2RayPassed:N0}] "
                         : "") +

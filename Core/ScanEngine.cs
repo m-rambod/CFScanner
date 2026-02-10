@@ -29,10 +29,6 @@ public static class ScanEngine
         // ---------------------------------------------------------------------
         // 1. Channel Initialization (Backpressure Control)
         // ---------------------------------------------------------------------
-        // Bounded channels are used to prevent unbounded memory growth.
-        // If downstream workers are slower, upstream producers will pause.
-
-        // Stage 1 -> Stage 2 : TCP connections
         var tcpChannel = Channel.CreateBounded<ScannerWorkers.LiveConnection>(
             new BoundedChannelOptions(GlobalContext.Config.TcpChannelBuffer)
             {
@@ -41,12 +37,11 @@ public static class ScanEngine
                 FullMode = BoundedChannelFullMode.Wait
             });
 
-        // Stage 2 -> Stage 3 : Heuristic-passed IPs (optional)
-        Channel<ScannerWorkers.HeuristicResult>? v2rayChannel = null;
+        Channel<ScannerWorkers.SignatureResult>? v2rayChannel = null;
         if (GlobalContext.Config.EnableV2RayCheck)
         {
             v2rayChannel =
-                Channel.CreateBounded<ScannerWorkers.HeuristicResult>(
+                Channel.CreateBounded<ScannerWorkers.SignatureResult>(
                     new BoundedChannelOptions(
                         GlobalContext.Config.V2RayChannelBuffer)
                     {
@@ -59,9 +54,6 @@ public static class ScanEngine
         // ---------------------------------------------------------------------
         // 2. Start UI Monitor
         // ---------------------------------------------------------------------
-        // Runs independently to keep progress reporting responsive
-        // without blocking worker threads.
-
         var monitorTask = Task.Run(() =>
             ConsoleInterface.MonitorUi(
                 tcpChannel.Reader,
@@ -69,17 +61,15 @@ public static class ScanEngine
                 GlobalContext.Cts.Token));
 
         // ---------------------------------------------------------------------
-        // 3. Stage 2 Consumers (Heuristic Workers)
+        // 3. Stage 2 Consumers (Signature/Signature Workers)
         // ---------------------------------------------------------------------
-        // Perform TLS handshake and HTTP header analysis.
+        var signatureTasks =
+            new Task[GlobalContext.Config.SignatureWorkers];
 
-        var heuristicTasks =
-            new Task[GlobalContext.Config.HeuristicWorkers];
-
-        for (int i = 0; i < GlobalContext.Config.HeuristicWorkers; i++)
+        for (int i = 0; i < GlobalContext.Config.SignatureWorkers; i++)
         {
-            heuristicTasks[i] = Task.Run(() =>
-                ScannerWorkers.ConsumerWorker_Heuristic(
+            signatureTasks[i] = Task.Run(() =>
+                ScannerWorkers.ConsumerWorker_Signature(
                     tcpChannel.Reader,
                     v2rayChannel?.Writer,
                     GlobalContext.Cts.Token));
@@ -88,9 +78,7 @@ public static class ScanEngine
         // ---------------------------------------------------------------------
         // 4. Stage 3 Consumers (Real V2Ray/Xray Verification)
         // ---------------------------------------------------------------------
-        // Optional final validation using a real proxy connection.
-
-        Task[] v2rayTasks = Array.Empty<Task>();
+        Task[] v2rayTasks = [];
         if (GlobalContext.Config.EnableV2RayCheck &&
             v2rayChannel != null)
         {
@@ -109,8 +97,6 @@ public static class ScanEngine
         // ---------------------------------------------------------------------
         // 5. Stage 1 Producer (TCP Connection Attempts)
         // ---------------------------------------------------------------------
-        // Uses Parallel.ForEachAsync for high-throughput connection attempts.
-
         try
         {
             await Parallel.ForEachAsync(
@@ -136,19 +122,26 @@ public static class ScanEngine
         // 6. Graceful Shutdown Sequence
         // ---------------------------------------------------------------------
 
-        // Signal Stage 2 that no more TCP connections will arrive
-        tcpChannel.Writer.Complete();
-        await Task.WhenAll(heuristicTasks);
-
-        // Signal Stage 3 (if active) that no more heuristic results will arrive
-        if (v2rayChannel != null)
+        // ✅ FIX: Only wait for workers if we are NOT cancelling (Normal Finish)
+        // If user pressed Ctrl+C, we skip this block and exit immediately.
+        if (!GlobalContext.Cts.IsCancellationRequested)
         {
-            v2rayChannel.Writer.Complete();
-            await Task.WhenAll(v2rayTasks);
+            // Signal Stage 2 that no more TCP connections will arrive
+            tcpChannel.Writer.Complete();
+            await Task.WhenAll(signatureTasks);
+
+            // Signal Stage 3 (if active) that no more signature results will arrive
+            if (v2rayChannel != null)
+            {
+                v2rayChannel.Writer.Complete();
+                await Task.WhenAll(v2rayTasks);
+            }
+
+            // Cancel the UI loop manually since we finished normally
+            GlobalContext.Cts.Cancel();
         }
 
         // Stop UI monitoring and ensure all background tasks exit
-        GlobalContext.Cts.Cancel();
         try { await monitorTask; } catch { }
 
         ConsoleInterface.HideStatusLine();

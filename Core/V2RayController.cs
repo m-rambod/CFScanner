@@ -93,10 +93,10 @@ public static class V2RayController
     ///   4. Send a real HTTP request through the proxy
     /// </summary>
     /// <param name="ipAddress">Target IP address to verify.</param>
-    /// <param name="heuristicLatency">
-    /// Latency measured during heuristic stage (kept for correlation/future use).
+    /// <param name="signatureLatency">
+    /// Latency measured during signature stage (kept for correlation/future use).
     /// </param>
-    public static async Task TestV2RayConnection(string ipAddress, long heuristicLatency)
+    public static async Task TestV2RayConnection(string ipAddress, long signatureLatency)
     {
         int localPort = GetFreeTcpPort();
         Process? xrayProcess = null;

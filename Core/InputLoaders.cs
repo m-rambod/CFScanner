@@ -169,8 +169,7 @@ public static class InputLoader
 
         if (GlobalContext.IpFilter.RangeCount == 0)
         {
-            Console.WriteLine(
-                "[Warning] No exclusions set! Scanning ALL internet.");
+            ConsoleInterface.PrintWarning("No exclusions set! Scanning ALL internet.");
         }
 
         return (NetUtils.GenerateRandomIps(), -1, true);

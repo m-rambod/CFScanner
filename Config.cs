@@ -18,9 +18,9 @@ public static class Defaults
 
     /// <summary>
     /// Base domain used for generating random SNI values
-    /// during heuristic TLS tests.
+    /// during signature TLS tests.
     /// </summary>
-    public const string BaseSni = "cloudflare.com";
+    public const string BaseSni = "speed.cloudflare.com";
 
     // ---------------------------------------------------------------------
     // Behavioral Flags
@@ -65,9 +65,9 @@ public static class Defaults
     public const int TcpWorkers = 100;
 
     /// <summary>
-    /// Number of heuristic workers performing TLS/HTTP checks.
+    /// Number of signature workers performing TLS/HTTP checks.
     /// </summary>
-    public const int HeuristicWorkers = 30;
+    public const int SignatureWorkers = 30;
 
     /// <summary>
     /// Number of workers performing real V2Ray/Xray verification.
@@ -75,13 +75,13 @@ public static class Defaults
     public const int V2RayWorkers = 8;
 
     /// <summary>
-    /// Capacity of the TCP-to-heuristic channel buffer.
+    /// Capacity of the TCP-to-signature channel buffer.
     /// Provides backpressure to avoid memory spikes.
     /// </summary>
     public const int TcpChannelBuffer = 100;
 
     /// <summary>
-    /// Capacity of the heuristic-to-V2Ray channel buffer.
+    /// Capacity of the signature-to-V2Ray channel buffer.
     /// </summary>
     public const int V2RayChannelBuffer = 30;
 
@@ -111,9 +111,9 @@ public static class Defaults
     public const int HttpReadTimeoutMs = 2_000;
 
     /// <summary>
-    /// Total timeout budget for the entire heuristic stage.
+    /// Total timeout budget for the entire signature stage.
     /// </summary>
-    public const int HeuristicTotalTimeoutMs = 5_000;
+    public const int SignatureTotalTimeoutMs = 5_000;
 
     /// <summary>
     /// Maximum time to wait for the Xray process to become ready.
@@ -215,9 +215,9 @@ public class Config
     public int TcpWorkers { get; set; } = Defaults.TcpWorkers;
 
     /// <summary>
-    /// Number of heuristic workers.
+    /// Number of signature workers.
     /// </summary>
-    public int HeuristicWorkers { get; set; } = Defaults.HeuristicWorkers;
+    public int SignatureWorkers { get; set; } = Defaults.SignatureWorkers;
 
     /// <summary>
     /// Number of V2Ray/Xray verification workers.
@@ -270,10 +270,10 @@ public class Config
     public int HttpReadTimeoutMs { get; set; } = Defaults.HttpReadTimeoutMs;
 
     /// <summary>
-    /// Total timeout budget for the heuristic stage.
+    /// Total timeout budget for the signature stage.
     /// </summary>
-    public int HeuristicTotalTimeoutMs { get; set; } =
-        Defaults.HeuristicTotalTimeoutMs;
+    public int SignatureTotalTimeoutMs { get; set; } =
+        Defaults.SignatureTotalTimeoutMs;
 
     /// <summary>
     /// Maximum wait time for Xray startup.

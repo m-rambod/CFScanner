@@ -1,7 +1,7 @@
 ﻿# CFScanner
 
 > **A high-performance Cloudflare IP scanner using TCP, TLS/HTTP
-> heuristics, and optional real-world validation via Xray/V2Ray.**
+> signatures, and optional real-world validation via Xray/V2Ray.**
 
 ![Platform](https://img.shields.io/badge/platform-win%20%7C%20linux%20%7C%20mac-lightgrey)
 ![.NET](https://img.shields.io/badge/.NET-8.0-512bd4)
@@ -17,7 +17,7 @@ IPs are actually functional and capable of passing traffic.
 
 -   **Multi-Stage Pipeline:**
     1.  **TCP Stage:** Fast connectivity check on port 443.
-    2.  **Heuristic Stage:** TLS handshake and HTTP response analysis
+    2.  **Signature Stage:** TLS handshake and HTTP response analysis
         (Cloudflare fingerprinting).
     3.  **Real Proxy Stage (Optional):** Validates the IP by
         establishing a real V2Ray/Xray connection.
@@ -98,7 +98,7 @@ cfscanner -f my_ips.txt
 Scan with high concurrency (Optimized for stable networks):
 
 ``` bash
-cfscanner --asn cloudflare --tcp-workers 100 --heuristic-workers 40
+cfscanner --asn cloudflare --tcp-workers 100 --signature-workers 40
 ```
 
 ------------------------------------------------------------------------
@@ -201,9 +201,9 @@ Recommended settings for high-latency/unstable networks (e.g., Iran):
 | Option               | Default | Description                                                     |
 |----------------------|---------|-----------------------------------------------------------------|
 | `--tcp-workers`      | 100     | Concurrent TCP connection attempts. Rec: 40–70                  |
-| `--heuristic-workers`| 30      | Concurrent TLS/HTTP checks. Rec: 15–25                          |
+| `--signature-workers`| 30      | Concurrent TLS/HTTP checks. Rec: 15–25                          |
 | `--v2ray-workers`    | 8       | Concurrent Xray proxy tests. Rec: 4–8                           |
-| `--tcp-buffer`       | 100     | Buffer size between TCP and Heuristic stages.                   |
+| `--tcp-buffer`       | 100     | Buffer size between TCP and Signature stages.                   |
 | `--v2ray-buffer`     | 30      | Buffer size before the V2Ray stage.                             |
 
 
