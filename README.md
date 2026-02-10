@@ -10,8 +10,7 @@
 ## 📖 Overview
 
 **CFScanner** is an advanced network scanning tool designed to
-discover working Cloudflare fronting IPs. Unlike simple TCP scanners,
-this tool employs a robust multi-stage pipeline to ensure the discovered
+discover working Cloudflare fronting IPs. This tool employs a robust multi-stage pipeline to ensure the discovered
 IPs are actually functional and capable of passing traffic.
 
 ### Key Features
