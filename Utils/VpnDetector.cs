@@ -14,19 +14,19 @@ public static class VpnDetector
 {
     // Keywords that suggest a VPN interface.
     private static readonly string[] VpnKeywords =
-    {
+    [
         "tun", "tap", "ppp", "vpn", "wireguard", "wg",
         "anyconnect", "openvpn", "l2tp", "ipsec",
         "utun", "ipsec0", "vpnclient", "zerotier", "tailscale"
-    };
+    ];
 
     // Interfaces that are virtual but not VPNs (whitelist).
     private static readonly string[] Whitelist =
-    {
+    [
         "vmware", "virtualbox", "docker", "wsl", "hyper-v",
         "vEthernet", "vboxnet", "kvm", "veth", "br-", "bridge",
         "loopback", "microsoft wi-fi direct virtual adapter"
-    };
+    ];
 
     /// <summary>
     /// Checks if an active VPN interface (with a gateway) is present.
@@ -38,28 +38,30 @@ public static class VpnDetector
 
         foreach (var ni in interfaces)
         {
-            // Only interfaces that are up and not loopback.
+            // 1. Basic Filters: Must be UP and NOT Loopback
             if (ni.OperationalStatus != OperationalStatus.Up) continue;
             if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
 
             var name = (ni.Name + " " + ni.Description).ToLowerInvariant();
 
-            // Skip whitelisted virtual adapters.
+            // 2. Whitelist Check (Skip VMWare, Hyper-V, etc.)
             if (Whitelist.Any(w => name.Contains(w))) continue;
 
-            // Check for VPN‑like names.
-            bool isSuspicious = VpnKeywords.Any(k => name.Contains(k));
+            // 3. Keyword Check (Is it a VPN?)
+            bool isSuspicious = VpnKeywords.Any(k => System.Text.RegularExpressions.Regex.IsMatch(name, $@"\b{k}"));
             if (!isSuspicious) continue;
 
-            // Must have a gateway (non‑zero) to be actually routing traffic.
+            // 4. CRITICAL FIX: Check for Assigned IP instead of Gateway
+            // VPN adapters (Tun/Tap/WireGuard) often have no gateway property
+            // but they ALWAYS have an assigned Unicast IP.
             var ipProps = ni.GetIPProperties();
-            foreach (var gateway in ipProps.GatewayAddresses)
+
+            // If the interface has any valid Unicast IP (IPv4 or IPv6), it is active.
+            if (ipProps.UnicastAddresses.Any(ua =>
+                !IPAddress.IsLoopback(ua.Address) &&
+                ua.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)) // Optional: Focus on IPv4
             {
-                if (!gateway.Address.Equals(IPAddress.Any) &&
-                    !gateway.Address.Equals(IPAddress.IPv6Any))
-                {
-                    return true;
-                }
+                return true;
             }
         }
 

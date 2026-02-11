@@ -1,10 +1,12 @@
-﻿# CFScanner
+﻿[English](/README.md) | [فارسی](/README.fa_IR.md)
 
-> **A high-performance Cloudflare IP scanner using TCP, TLS/HTTP
+# CFScanner
+
+> **A high-performance Cloudflare IPv4 scanner using TCP, TLS/HTTP
 > signatures, and optional real-world validation via Xray/V2Ray.**
 
 ![Platform](https://img.shields.io/badge/platform-win%20%7C%20linux%20%7C%20mac-lightgrey)
-![.NET](https://img.shields.io/badge/.NET-8.0-512bd4)
+![.NET](https://img.shields.io/badge/.NET-10.0-512bd4)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ## 📖 Overview
@@ -43,7 +45,7 @@ To build and run **cfscanner** from source, you need the following external comp
 
 ### 1. .NET Runtime / SDK
 
-The application requires **.NET 8.0 SDK** (or Runtime) to build and run from source.
+The application requires **.NET 10.0 SDK** (or Runtime) to build and run from source.
 
 > ℹ️ If you are using the prebuilt releases, .NET is already bundled and no separate installation is required.
 
@@ -178,14 +180,13 @@ cfscanner --asn cloudflare --v2ray-config config.json
 
 ### 📥 Input Options
 
-| Option             | Description                                                                 |
-|--------------------|-----------------------------------------------------------------------------|
-| `-a, --asn <LIST>` | Scan IPs belonging to specific ASNs or Organizations (e.g., cloudflare).    |
-| `-f, --file <LIST>`| Load IPs/CIDRs from text files. Lines starting with `#` are ignored.         |
-| `-r, --range <LIST>`| Scan inline IPs or CIDR ranges (e.g., `1.1.1.1/24`).                          |
+| Option               | Description                                                                 |
+|----------------------|-----------------------------------------------------------------------------|
+| `-a, --asn <LIST>`   | Scan IPs belonging to specific ASNs or Organizations (e.g., cloudflare).    |
+| `-f, --file <LIST>`  | Load IPs/CIDRs from text files. Lines starting with `#` are ignored.         |
+| `-r, --range <LIST>` | Scan inline IPs or CIDR ranges (e.g., `103.21.244.0/22`).                        |
 
-
-## ⛔ Exclusion Options
+### ⛔ Exclusion Options
 
 | Option                    | Description                                   |
 |---------------------------|-----------------------------------------------|
@@ -193,35 +194,48 @@ cfscanner --asn cloudflare --v2ray-config config.json
 | `-xf, --exclude-file`     | Exclude IPs/CIDRs listed in a file.           |
 | `-xr, --exclude-range`    | Exclude inline IPs or CIDRs.                  |
 
+### ⚡ Performance & Tuning Options
 
-## ⚡ Performance & Tuning
+| Option                     | Description                                                                 |
+|----------------------------|-----------------------------------------------------------------------------|
+| `--tcp-workers <N>`        | Number of concurrent TCP workers (default: 10, range: 1-1000).              |
+| `--signature-workers <N>`  | Number of concurrent TLS/HTTP signature workers (default: 5, range: 1-500). |
+| `--v2ray-workers <N>`      | Number of concurrent V2Ray workers (default: 2, range: 1-100).              |
+| `--tcp-buffer <N>`         | TCP channel buffer size (default: 100).                                     |
+| `--v2ray-buffer <N>`       | V2Ray channel buffer size (default: 30).                                    |
 
-Recommended settings for high-latency/unstable networks (e.g., Iran):
+### ⏱️ Timeout Options (Milliseconds)
 
-| Option               | Default | Description                                                     |
-|----------------------|---------|-----------------------------------------------------------------|
-| `--tcp-workers`      | 100     | Concurrent TCP connection attempts. Rec: 40–70                  |
-| `--signature-workers`| 30      | Concurrent TLS/HTTP checks. Rec: 15–25                          |
-| `--v2ray-workers`    | 8       | Concurrent Xray proxy tests. Rec: 4–8                           |
-| `--tcp-buffer`       | 100     | Buffer size between TCP and Signature stages.                   |
-| `--v2ray-buffer`     | 30      | Buffer size before the V2Ray stage.                             |
-
+| Option                     | Description                                                                 |
+|----------------------------|-----------------------------------------------------------------------------|
+| `--tcp-timeout <N>`        | Timeout for TCP connections (default: 3000 ms, range: 100-30000).           |
+| `--tls-timeout <N>`        | Timeout for TLS handshakes (default: 5000 ms, range: 100-30000).            |
+| `--http-timeout <N>`       | Timeout for HTTP requests (default: 5000 ms, range: 100-30000).             |
+| `--sign-timeout <N>`       | Timeout for signature validation (default: 5000 ms, range: 500-60000).      |
+| `--xray-conn-timeout <N>`  | Timeout for Xray/V2Ray connections (default: 10000 ms, range: 1000-60000).  |
 
 ### 📤 Output Options
 
-| Option               | Description                                                         |
-|----------------------|---------------------------------------------------------------------|
-| `--sort`             | Sort the final results file by latency (lowest to highest).         |
-| `-nl, --no-latency`  | Do not save latency timing in the output file.                      |
-| `-s, --shuffle`      | Shuffle the input IP list before scanning.                          |
+| Option                     | Description                                                                 |
+|----------------------------|-----------------------------------------------------------------------------|
+| `--output <FILE>`          | Save the results to a file in JSON format.                                 |
+| `--sort`                   | Sort the final results file by latency (lowest to highest).                |
+| `-nl, --no-latency`        | Do not save latency timing in the output file.                             |
+| `-s, --shuffle`            | Shuffle the input IP list before scanning.                                 |
+
+### 🛠️ Other Options
+
+| Option                     | Description                                                                 |
+|----------------------------|-----------------------------------------------------------------------------|
+| `-h, --help`               | Display a short help message.                                              |
+| `--help full`              | Display the full help message with detailed descriptions.                  |
 
 
 ------------------------------------------------------------------------
 
 ## ⚠️ Disclaimer
 
-This tool is created for educational and research
-purposes only.\
+This tool is created for educational and research purposes only.\
 The author is not responsible for any misuse of this tool or any legal
 consequences arising from its use.\
 Please ensure you comply with all local laws and regulations regarding
