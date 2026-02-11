@@ -8,19 +8,19 @@ using CFScanner.Utils;
 // This file defines the full startup and execution flow of CFScanner.
 // -------------------------------------------------------------------------
 
-// 1. Pre-flight check: warn about VPN/Proxy usage
-// Running the scanner behind a VPN or proxy may cause abuse reports
-// or unreliable results.
-if (!AppValidator.CheckVpnRisk())
-    return;
-
-// 2. Register global cancellation handler (Ctrl+C)
+// 1. Register global cancellation handler (Ctrl+C)
 // Ensures a graceful shutdown across all worker threads.
 CancellationManager.Setup();
 
-// 3. Parse command-line arguments
+// 2. Parse command-line arguments
 // Populates GlobalContext.Config and validates basic syntax.
 if (!ArgParser.ParseArguments(args))
+    return;
+
+// 3. Pre-flight check: warn about VPN/Proxy usage
+// Running the scanner behind a VPN or proxy may cause abuse reports
+// or unreliable results.
+if (!AppValidator.CheckVpnRisk())
     return;
 
 // 4. Validate user inputs and environment

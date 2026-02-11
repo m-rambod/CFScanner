@@ -252,25 +252,44 @@ USAGE:
   CFScanner [OPTIONS]
 
 INPUT:
-  -a, --asn <LIST>
-  -f, --file <LIST>
-  -r, --range <LIST>
+  -a, --asn <LIST>              List of ASNs to scan.
+  -f, --file <LIST>             List of files containing IPs to scan.
+  -r, --range <LIST>            List of IP ranges to scan.
+
+EXCLUSION RULES:
+  -xf, --exclude-file <LIST>    List of files containing IPs to exclude.
+  -xa, --exclude-asn <LIST>     List of ASNs to exclude.
+  -xr, --exclude-range <LIST>   List of IP ranges to exclude.
 
 PERFORMANCE:
-  --tcp-workers <N>
-  --signature-workers <N>
-  --v2ray-workers <N>
+  --tcp-workers <N>             Number of TCP workers (1-1000).
+  --signature-workers <N>       Number of signature workers (1-500).
+  --v2ray-workers <N>           Number of V2Ray workers (1-100).
+
+BUFFER SIZES:
+  --tcp-buffer <N>              TCP channel buffer size.
+  --v2ray-buffer <N>            V2Ray channel buffer size.
 
 TIMEOUTS (ms):
-  --tcp-timeout <N>
-  --tls-timeout <N>
-  --http-timeout <N>
-  --sign-timeout <N>
-  --xray-conn-timeout <N>
+  --tcp-timeout <N>             TCP timeout in milliseconds (100-30000).
+  --tls-timeout <N>             TLS timeout in milliseconds (100-30000).
+  --http-timeout <N>            HTTP read timeout in milliseconds (100-30000).
+  --sign-timeout <N>            Signature total timeout in milliseconds (500-60000).
+  --xray-start-timeout <N>      Xray startup timeout in milliseconds (1000-60000).
+  --xray-conn-timeout <N>       Xray connection timeout in milliseconds (1000-60000).
+  --xray-kill-timeout <N>       Xray process kill timeout in milliseconds (100-10000).
 
-OTHER:
-  -h, --help
-  --help full
+V2RAY / XRAY:
+  -vc, --v2ray-config <PATH>    Path to the V2Ray configuration file.
+
+OUTPUT CONTROL:
+  --sort                        Sort results by latency.
+  -nl, --no-latency             Do not save latency information.
+  -s, --shuffle                 Shuffle the input list before scanning.
+
+HELP:
+  -h, --help                    Show this help message.
+  --help full                   Show detailed help message.
 ");
     }
 
@@ -294,15 +313,71 @@ PIPELINE
 2) TLS + HTTP signature validation
 3) Optional real proxy verification via Xray/V2Ray
 
-TIMEOUT OPTIONS (MS)
--------------------
---tcp-timeout           Default: {Defaults.TcpTimeoutMs}
---tls-timeout           Default: {Defaults.TlsTimeoutMs}
---http-timeout          Default: {Defaults.HttpReadTimeoutMs}
---sign-timeout          Default: {Defaults.SignatureTotalTimeoutMs}
---xray-start-timeout    Default: {Defaults.XrayStartupTimeoutMs}
---xray-conn-timeout     Default: {Defaults.XrayConnectionTimeoutMs}
---xray-kill-timeout     Default: {Defaults.XrayProcessKillTimeoutMs}
+USAGE
+-----
+CFScanner [OPTIONS]
+
+OPTIONS
+-------
+INPUT:
+  -a, --asn <LIST>              List of ASNs to scan.
+  -f, --file <LIST>             List of files containing IPs to scan.
+  -r, --range <LIST>            List of IP ranges to scan.
+
+EXCLUSION RULES:
+  -xf, --exclude-file <LIST>    List of files containing IPs to exclude.
+  -xa, --exclude-asn <LIST>     List of ASNs to exclude.
+  -xr, --exclude-range <LIST>   List of IP ranges to exclude.
+
+PERFORMANCE:
+  --tcp-workers <N>             Number of TCP workers (1-1000).
+  --signature-workers <N>       Number of signature workers (1-500).
+  --v2ray-workers <N>           Number of V2Ray workers (1-100).
+
+BUFFER SIZES:
+  --tcp-buffer <N>              TCP channel buffer size (default: {Defaults.TcpChannelBuffer}).
+  --v2ray-buffer <N>            V2Ray channel buffer size (default: {Defaults.V2RayChannelBuffer}).
+
+TIMEOUT OPTIONS (MS):
+  --tcp-timeout <N>             TCP timeout in milliseconds (100-30000).
+  --tls-timeout <N>             TLS timeout in milliseconds (100-30000).
+  --http-timeout <N>            HTTP read timeout in milliseconds (100-30000).
+  --sign-timeout <N>            Signature total timeout in milliseconds (500-60000).
+  --xray-start-timeout <N>      Xray startup timeout in milliseconds (1000-60000).
+  --xray-conn-timeout <N>       Xray connection timeout in milliseconds (1000-60000).
+  --xray-kill-timeout <N>       Xray process kill timeout in milliseconds (100-10000).
+
+V2RAY / XRAY:
+  -vc, --v2ray-config <PATH>    Path to the V2Ray configuration file.
+
+OUTPUT CONTROL:
+  --sort                        Sort results by latency.
+  -nl, --no-latency             Do not save latency information.
+  -s, --shuffle                 Shuffle the input list before scanning.
+
+HELP:
+  -h, --help                    Show this help message.
+  --help full                   Show detailed help message.
+  
+EXAMPLES
+--------
+1) Scan a list of IPs from a file:
+   CFScanner --file ips.txt
+
+2) Scan a specific ASN:
+   CFScanner --asn 12345
+
+3) Exclude specific IP ranges:
+   CFScanner --range 1.1.1.0/24 --exclude-range 1.1.1.128/25
+
+4) Use a custom V2Ray configuration:
+   CFScanner --v2ray-config config.json
+
+5) Adjust performance settings:
+   CFScanner --tcp-workers 50 --signature-workers 20
+
+6) Set custom timeouts:
+   CFScanner --tcp-timeout 5000 --tls-timeout 10000
 ");
     }
 }

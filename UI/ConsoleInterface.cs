@@ -113,8 +113,7 @@ public static class ConsoleInterface
                 ClearStatusLineInternal();
 
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.Write($"[✓ {type}] {ip}");
-            Console.Write(" - Latency: ");
+            Console.Write($"[{type}] {ip} - Latency: ");
 
             // Color-code latency for quick visual feedback
             if (latency < 800)
