@@ -218,7 +218,7 @@ cfscanner --asn cloudflare --v2ray-config config.json
 
 | Option                     | Description                                                                 |
 |----------------------------|-----------------------------------------------------------------------------|
-| `--output <FILE>`          | Save the results to a file in JSON format.                                 |
+| `--output <FILE>`          | Save the results to a file.                                 |
 | `--sort`                   | Sort the final results file by latency (lowest to highest).                |
 | `-nl, --no-latency`        | Do not save latency timing in the output file.                             |
 | `-s, --shuffle`            | Shuffle the input IP list before scanning.                                 |
