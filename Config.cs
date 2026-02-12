@@ -123,7 +123,7 @@ public static class Defaults
     /// <summary>
     /// Timeout for a single request sent through the Xray proxy.
     /// </summary>
-    public const int XrayConnectionTimeoutMs = 4_000;
+    public const int XrayConnectionTimeoutMs = 3_000;
 
     /// <summary>
     /// Maximum time to wait when terminating the Xray process.
