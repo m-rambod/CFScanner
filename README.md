@@ -129,7 +129,6 @@ The scanner will dynamically replace `IP.IP.IP.IP` with the candidate IP during 
 
 
 ### Sample `config.json`
-
 ``` json
 {
   "outbounds": [
@@ -198,30 +197,40 @@ cfscanner --asn cloudflare --v2ray-config config.json
 
 | Option                     | Description                                                                 |
 |----------------------------|-----------------------------------------------------------------------------|
-| `--tcp-workers <N>`        | Number of concurrent TCP workers (default: 10, range: 1-1000).              |
-| `--signature-workers <N>`  | Number of concurrent TLS/HTTP signature workers (default: 5, range: 1-500). |
-| `--v2ray-workers <N>`      | Number of concurrent V2Ray workers (default: 2, range: 1-100).              |
-| `--tcp-buffer <N>`         | TCP channel buffer size (default: 100).                                     |
-| `--v2ray-buffer <N>`       | V2Ray channel buffer size (default: 30).                                    |
+| `--tcp-workers <N>`        | Number of concurrent TCP workers (range: 1-5000).                           |
+| `--signature-workers <N>`  | Number of concurrent TLS/HTTP signature workers (range: 1-2000).            |
+| `--v2ray-workers <N>`      | Number of concurrent V2Ray workers (range: 1-500).                          |
+| `--tcp-buffer <N>`         | TCP channel buffer size (range: 1-50000).                                   |
+| `--v2ray-buffer <N>`       | V2Ray channel buffer size (range: 1-10000). Buffers auto-scale based on worker counts if not explicitly set. |
 
 ### ⏱️ Timeout Options (Milliseconds)
 
 | Option                     | Description                                                                 |
 |----------------------------|-----------------------------------------------------------------------------|
-| `--tcp-timeout <N>`        | Timeout for TCP connections (default: 3000 ms, range: 100-30000).           |
-| `--tls-timeout <N>`        | Timeout for TLS handshakes (default: 5000 ms, range: 100-30000).            |
-| `--http-timeout <N>`       | Timeout for HTTP requests (default: 5000 ms, range: 100-30000).             |
-| `--sign-timeout <N>`       | Timeout for signature validation (default: 5000 ms, range: 500-60000).      |
-| `--xray-conn-timeout <N>`  | Timeout for Xray/V2Ray connections (default: 10000 ms, range: 1000-60000).  |
+| `--tcp-timeout <N>`        | Timeout for TCP connections (range: 100-30000 ms).                          |
+| `--tls-timeout <N>`        | Timeout for TLS handshakes (range: 100-30000 ms).                           |
+| `--http-timeout <N>`       | Timeout for HTTP requests (range: 100-30000 ms).                            |
+| `--sign-timeout <N>`       | Timeout for signature validation (range: 500-60000 ms).                     |
+| `--xray-start-timeout <N>` | Timeout for Xray process startup (range: 1000-60000 ms).                    |
+| `--xray-conn-timeout <N>`  | Timeout for Xray/V2Ray connections (range: 1000-60000 ms).                  |
+| `--xray-kill-timeout <N>`  | Timeout for Xray process termination (range: 100-10000 ms).                 |
 
 ### 📤 Output Options
 
 | Option                     | Description                                                                 |
 |----------------------------|-----------------------------------------------------------------------------|
-| `--output <FILE>`          | Save the results to a file.                                 |
 | `--sort`                   | Sort the final results file by latency (lowest to highest).                |
 | `-nl, --no-latency`        | Do not save latency timing in the output file.                             |
 | `-s, --shuffle`            | Shuffle the input IP list before scanning.                                 |
+
+### 🎯 Profile Presets
+
+| Option                     | Description                                                                 |
+|----------------------------|-----------------------------------------------------------------------------|
+| `--normal`                 | Balanced profile (default). Uses factory defaults.                         |
+| `--fast`                   | Aggressive profile for stable networks. TCP: 150 workers, Sig: 50, V2Ray: 16. |
+| `--slow`                   | Stable/conservative profile for unreliable networks. TCP: 50 workers, Sig: 20, V2Ray: 4. |
+| `--extreme`                | Datacenter-grade profile with maximum concurrency. TCP: 200 workers, Sig: 80, V2Ray: 32. |
 
 ### 🛠️ Other Options
 
@@ -229,7 +238,7 @@ cfscanner --asn cloudflare --v2ray-config config.json
 |----------------------------|-----------------------------------------------------------------------------|
 | `-h, --help`               | Display a short help message.                                              |
 | `--help full`              | Display the full help message with detailed descriptions.                  |
-
+| `-y, --yes, --no-confirm`  | Skip confirmation prompt and start scanning immediately.                   |
 
 ------------------------------------------------------------------------
 
