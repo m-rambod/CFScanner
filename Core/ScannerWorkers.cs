@@ -76,7 +76,7 @@ public static class ScannerWorkers
             cts.CancelAfter(GlobalContext.Config.TcpTimeoutMs);
 
             // ConnectAsync honors cancellation in .NET 8+
-            await client.ConnectAsync(ip, 443, cts.Token);
+            await client.ConnectAsync(ip, GlobalContext.Config.Port, cts.Token);
 
             if (client.Connected)
             {
@@ -175,7 +175,7 @@ public static class ScannerWorkers
                                 GlobalContext.Config.TcpTimeoutMs);
 
                             await retryClient.ConnectAsync(
-                                item.Ip, 443, cts.Token);
+                                item.Ip, GlobalContext.Config.Port, cts.Token);
 
                             if (retryClient.Connected)
                             {

@@ -124,7 +124,7 @@ public static class V2RayController
 
             // Inject the target IP into the outbound section
             string finalConfigJson = rootNode.ToJsonString()
-                .Replace("IP.IP.IP.IP", ipAddress);
+                                    .Replace("IP.IP.IP.IP", ipAddress);
 
             // Start Xray and provide config via stdin (no temp files)
             xrayProcess = StartXrayProcess(finalConfigJson);

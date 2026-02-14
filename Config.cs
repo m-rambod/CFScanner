@@ -22,6 +22,11 @@ public static class Defaults
     /// </summary>
     public const string BaseSni = "speed.cloudflare.com";
 
+    /// <summary>
+    /// Base Port number to test connectivity and TLS tests and XRAY check
+    /// </summary>
+    public const int Port = 443;
+
     // ---------------------------------------------------------------------
     // Behavioral Flags
     // ---------------------------------------------------------------------
@@ -189,6 +194,11 @@ public class Config
     /// Base domain used for generating randomized SNI values.
     /// </summary>
     public string BaseSni { get; set; } = Defaults.BaseSni;
+
+    /// <summary>
+    /// Base domain used for generating randomized SNI values.
+    /// </summary>
+    public int Port { get; set; } = Defaults.Port;
 
     /// <summary>
     /// Enables shuffling of IPs before scanning (fixed-range mode only).

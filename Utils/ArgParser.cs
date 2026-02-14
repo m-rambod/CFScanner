@@ -9,6 +9,7 @@ namespace CFScanner.Utils;
 /// </summary>
 public static class ArgParser
 {
+
     /// <summary>
     /// Parses arguments, applies configuration, and validates inputs.
     /// </summary>
@@ -84,11 +85,8 @@ public static class ArgParser
 
                 // --- Profiles (Already handled in pre-scan, skip here) ---
                 case "--fast": case "--slow": case "--extreme": case "--normal": break;
-                case "-y":
-                case "--yes":
-                case "--no-confirm":
-                    skipConfirmation = true;
-                    break;
+                case "-y": case "--yes": case "--no-confirm": skipConfirmation = true; break;
+                case "-p": case "--port": GlobalContext.Config.Port = ParsePort(value, option); i++; break;
                 default: ErrorAndExit($"Unknown option: {args[i]}"); return false;
             }
         }
@@ -124,6 +122,26 @@ public static class ArgParser
         return ScanProfile.Normal;
     }
 
+    /// <summary>
+    /// Allowed cloudflare HTTPS ports
+    /// </summary>
+    private static readonly HashSet<int> AllowedPorts =
+    [
+        443,2053,2083,2087,2096,8443
+    ];
+    /// <summary>
+    /// Extract Port Number from arguments.
+    /// </summary>
+    private static int ParsePort(string? value, string option)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            ErrorAndExit($"Missing value for option: {option}");
+        if (!int.TryParse(value, out int port))
+            ErrorAndExit($"Invalid port value: {value} for option: {option}");
+        if (!AllowedPorts.Contains(port))
+            ErrorAndExit($"Port {port} is not allowed. Allowed ports are: {string.Join(", ", AllowedPorts)}");
+        return port;
+    }
     /// <summary>
     /// Applies base settings for the selected profile.
     /// </summary>
@@ -358,6 +376,7 @@ TIMEOUTS (MS)
 
 GENERAL
 -------
+  -p, --port <N>                Port Number (Default 443)
   -vc, --v2ray-config <PATH>    Enable Xray verification.
   --sort                        Sort output by latency.
   -nl, --no-latency             Don't save latency.
