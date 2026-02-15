@@ -29,6 +29,7 @@ public static class ArgParser
         // Track explicit buffer settings to avoid auto-scaling them later if user set them
         bool tcpBufferExplicitlySet = false;
         bool v2rayBufferExplicitlySet = false;
+        bool speedBufferExplicitlySet = false;
 
         // 3. Parse and Override Configuration
         for (int i = 0; i < args.Length; i++)
@@ -68,6 +69,26 @@ public static class ArgParser
                     i++;
                     break;
 
+                // --- Speed Test Configuration ---
+                case "--speed-dl":
+                    GlobalContext.Config.MinDownloadSpeedKb = ParseBandwidthKb(value, option);
+                    i++;
+                    break;
+                case "--speed-ul":
+                    GlobalContext.Config.MinUploadSpeedKb = ParseBandwidthKb(value, option);
+                    i++;
+                    break;
+                case "--speed-workers":
+                    GlobalContext.Config.SpeedTestWorkers = ParseInt(value, option, 1, 50);
+                    i++;
+                    break;
+                case "--speed-buffer":
+                    GlobalContext.Config.SpeedTestBuffer = ParseInt(value, option, 1, 100);
+                    speedBufferExplicitlySet = true;
+                    i++;
+                    break;
+
+
                 // --- Timeouts ---
                 case "--tcp-timeout": GlobalContext.Config.TcpTimeoutMs = ParseInt(value, option, 100, 30000); i++; break;
                 case "--tls-timeout": GlobalContext.Config.TlsTimeoutMs = ParseInt(value, option, 100, 30000); i++; break;
@@ -98,6 +119,11 @@ public static class ArgParser
 
         if (!v2rayBufferExplicitlySet)
             GlobalContext.Config.V2RayChannelBuffer = Math.Max(GlobalContext.Config.V2RayWorkers * 3, 20);
+
+        // Smart default for SpeedTest Buffer:
+        // Ideally should be (Workers + 1) to keep pipeline flowing but prevent resource bloat.
+        if (!speedBufferExplicitlySet)
+            GlobalContext.Config.SpeedTestBuffer = GlobalContext.Config.SpeedTestWorkers + 1;
 
         // 5. User Feedback
         if (!skipConfirmation) DisplayProfileSummary(profile);
@@ -218,7 +244,25 @@ public static class ArgParser
         Console.WriteLine($"   Signature Workers:     {config.SignatureWorkers,-6} | (Internal)");
         Console.WriteLine($"   V2Ray Workers:         {config.V2RayWorkers,-6} | Buffer: {config.V2RayChannelBuffer}");
 
-        // 2. Timeouts
+        // 2. Speed Test Summary
+        if (config.MinDownloadSpeedKb > 0 || config.MinUploadSpeedKb > 0)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("\n [Speed Test Criteria]");
+            Console.ResetColor();
+            string minDl = config.MinDownloadSpeedKb > 0
+                              ? $"{config.MinDownloadSpeedKb} KB/s"
+                              : "N/A";
+
+            string minUl = config.MinUploadSpeedKb > 0
+                              ? $"{config.MinUploadSpeedKb} KB/s"
+                              : "N/A";
+
+            Console.WriteLine($"   Min Download:     {minDl,-10} | Workers: {config.SpeedTestWorkers}");
+            Console.WriteLine($"   Min Upload:       {minUl,-10} | Buffer:  {config.SpeedTestBuffer}");
+        }
+
+        // 3. Timeouts
         Console.ForegroundColor = ConsoleColor.Yellow;
         Console.WriteLine("\n [Timeouts (ms)]");
         Console.ResetColor();
@@ -227,7 +271,7 @@ public static class ArgParser
         Console.WriteLine($"   Xray Start:       {config.XrayStartupTimeoutMs,-6} | Xray Conn:   {config.XrayConnectionTimeoutMs}");
         Console.WriteLine($"   Xray Kill:        {config.XrayProcessKillTimeoutMs,-6}");
 
-        // 3. Behavior & Settings
+        // 4. Behavior & Settings
         Console.ForegroundColor = ConsoleColor.Yellow;
         Console.WriteLine("\n [Settings]");
         Console.ResetColor();
@@ -294,6 +338,40 @@ public static class ArgParser
         return result;
     }
 
+    /// <summary>
+    /// Parses bandwidth strings like "2mb", "500kb" into integer Kilobytes.
+    /// Defaults to KB if no suffix is provided.
+    /// </summary>
+    private static int ParseBandwidthKb(string? value, string option)
+    {
+        RequireValue(value, option);
+
+        string cleanValue = value!.Trim().ToLowerInvariant();
+        double multiplier = 1; // Default is KB
+        string numberPart = cleanValue;
+
+        if (cleanValue.EndsWith("mb") || cleanValue.EndsWith("m"))
+        {
+            multiplier = 1024;
+            numberPart = cleanValue.TrimEnd('m', 'b');
+        }
+        else if (cleanValue.EndsWith("kb") || cleanValue.EndsWith("k"))
+        {
+            multiplier = 1;
+            numberPart = cleanValue.TrimEnd('k', 'b');
+        }
+
+        if (!double.TryParse(numberPart, NumberStyles.Any, CultureInfo.InvariantCulture, out double result))
+        {
+            ErrorAndExit($"Invalid bandwidth value for '{option}': {value}. Examples: 500kb, 2mb.");
+        }
+
+        int finalKb = (int)(result * multiplier);
+        if (finalKb < 0) ErrorAndExit($"Value for '{option}' cannot be negative.");
+
+        return finalKb;
+    }
+
     private static void ErrorAndExit(string message)
     {
         ConsoleInterface.PrintError(message);
@@ -320,11 +398,13 @@ INPUT:
 
 OPTIONS:
   -vc <CONFIG>   Enable real V2Ray verification
+  --speed-dl     Min download speed (e.g., 2mb, 500kb)
+  --speed-ul     Min upload speed (e.g., 1mb)
   --sort         Sort results by latency
   --manual       Show full documentation
 
 EXAMPLE:
-  CFScanner --range 104.16.0.0/24 --fast --sort
+  CFScanner --range 104.16.0.0/24 --fast --speed-dl 2mb
 ");
     }
 
@@ -340,7 +420,7 @@ EXAMPLE:
 DESCRIPTION
 -----------
 High-performance IPv4 scanner for Cloudflare edge nodes.
-Pipeline: TCP Check -> TLS Signature -> V2Ray Verification.
+Pipeline: TCP Check -> TLS Signature -> V2Ray Verification -> [Speed Test].
 
 PROFILES (PRESETS)
 ------------------
@@ -360,6 +440,14 @@ EXCLUSION RULES
   -xf, --exclude-file <PATH>    Exclude IPs from file.
   -xa, --exclude-asn <ASN>      Exclude ASNs.
   -xr, --exclude-range <CIDR>   Exclude ranges.
+
+SPEED TEST CRITERIA
+-------------------
+  --speed-dl <VAL>              Min Download speed (e.g., '2mb', '500kb').
+  --speed-ul <VAL>              Min Upload speed (e.g., '256kb').
+  --speed-workers <N>           Concurrent speed tests (Default: 1).
+  --speed-buffer <N>            Speed test queue size (Default: Workers + 1).
+                                * Note: High workers on slow networks reduces accuracy.
 
 PERFORMANCE OVERRIDES
 ---------------------

@@ -1,5 +1,4 @@
 ﻿using System.Diagnostics;
-using System.Threading;
 using CFScanner.Utils;
 
 namespace CFScanner;
@@ -51,6 +50,7 @@ public static class GlobalContext
     private static long _tcpOpenTotal;
     private static int _signaturePassed;
     private static int _v2RayPassed;
+    private static int _speedTestPassed;
 
     // Scan mode flags and shared resources
     private static bool _isInfiniteMode;
@@ -98,6 +98,8 @@ public static class GlobalContext
     /// Number of IPs that passed real Xray/V2Ray proxy verification.
     /// </summary>
     public static int V2RayPassed => _v2RayPassed;
+
+    public static int SpeedTestPassed => _speedTestPassed;
 
     /// <summary>
     /// Indicates whether the scanner is running in infinite random mode.
@@ -150,4 +152,7 @@ public static class GlobalContext
     /// </summary>
     public static void IncrementV2RayPassed() =>
         Interlocked.Increment(ref _v2RayPassed);
+
+    public static void IncrementSpeedTestPassed() => Interlocked.Increment(ref _speedTestPassed);
+
 }

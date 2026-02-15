@@ -1,5 +1,6 @@
-﻿using System.Threading.Channels;
-using CFScanner.Core;
+﻿using CFScanner.Core;
+using System.Text;
+using System.Threading.Channels;
 
 namespace CFScanner.UI;
 
@@ -104,7 +105,7 @@ public static class ConsoleInterface
     /// <param name="ip">The verified IP address.</param>
     /// <param name="latency">Measured latency in milliseconds.</param>
     /// <param name="type">Stage identifier (e.g. SIGNATURE, REAL-XRAY).</param>
-    public static void PrintSuccess(string ip, long latency, string type)
+    public static void PrintSuccess(string ip, long latency, string type,ConsoleColor color=ConsoleColor.Green)
     {
         lock (ConsoleLock)
         {
@@ -112,7 +113,7 @@ public static class ConsoleInterface
             if (_statusLineVisible && !Console.IsOutputRedirected)
                 ClearStatusLineInternal();
 
-            Console.ForegroundColor = ConsoleColor.Green;
+            Console.ForegroundColor = color;
             Console.Write($"[{type}] {ip} - Latency: ");
 
             // Color-code latency for quick visual feedback
@@ -199,15 +200,18 @@ public static class ConsoleInterface
     /// Cancellation token used to stop the monitor gracefully.
     /// </param>
     public static async Task MonitorUi(
-        ChannelReader<ScannerWorkers.LiveConnection> tcpReader,
-        ChannelReader<ScannerWorkers.SignatureResult>? v2rayReader,
-        CancellationToken token)
+         ChannelReader<ScannerWorkers.LiveConnection> tcpReader,
+         ChannelReader<ScannerWorkers.SignatureResult>? v2rayReader,
+         ChannelReader<ScannerWorkers.SpeedTestRequest>? speedTestReader,
+         CancellationToken token)
     {
         try
         {
             while (!token.IsCancellationRequested)
             {
-                // Avoid flickering before any real activity starts
+                // ---------------------------------------------------------
+                // Avoid flicker before any activity
+                // ---------------------------------------------------------
                 if (GlobalContext.ScannedCount == 0 &&
                     GlobalContext.TcpOpenTotal == 0)
                 {
@@ -218,10 +222,12 @@ public static class ConsoleInterface
                 double elapsedSeconds =
                     GlobalContext.Stopwatch.Elapsed.TotalSeconds;
 
-                double speed =
+                double scanSpeed =
                     GlobalContext.ScannedCount / Math.Max(elapsedSeconds, 1);
 
-                // Progress representation
+                // ---------------------------------------------------------
+                // Progress
+                // ---------------------------------------------------------
                 string progressStr;
                 if (GlobalContext.IsInfiniteMode)
                 {
@@ -238,47 +244,81 @@ public static class ConsoleInterface
                         $"({GlobalContext.ScannedCount:N0}/{GlobalContext.TotalIps:N0})";
                 }
 
-                // Channel buffer utilization (backpressure indicator)
-                int tcpBufferUsage =
-                    (int)((tcpReader.Count * 100.0) /
+                // ---------------------------------------------------------
+                // Channel buffer usage (Backpressure visibility)
+                // ---------------------------------------------------------
+                int tcpBuf =
+                    (int)(tcpReader.Count * 100.0 /
                           Math.Max(GlobalContext.Config.TcpChannelBuffer, 1));
 
-                int v2rayBufferUsage = 0;
+                int v2Buf = 0;
                 if (GlobalContext.Config.EnableV2RayCheck &&
                     v2rayReader != null)
                 {
-                    v2rayBufferUsage =
-                        (int)((v2rayReader.Count * 100.0) /
+                    v2Buf =
+                        (int)(v2rayReader.Count * 100.0 /
                               Math.Max(GlobalContext.Config.V2RayChannelBuffer, 1));
                 }
 
-                // Build the final status line
-                _lastStatusLine =
-                    $"[Time {TimeSpan.FromSeconds(elapsedSeconds):hh\\:mm\\:ss}] " +
-                    $"[Prog {progressStr}] " +
-                    $"[Speed {speed:F0} ip/s] " +
-                    $"[Open {GlobalContext.TcpOpenTotal:N0}] " +
-                    $"[Sign {GlobalContext.SignaturePassed:N0}] " +
-                    (GlobalContext.Config.EnableV2RayCheck
-                        ? $"[V2Ray {GlobalContext.V2RayPassed:N0}] "
-                        : "") +
-                    $"[Buf {tcpBufferUsage}%"
-                    + (GlobalContext.Config.EnableV2RayCheck
-                        ? $"/{v2rayBufferUsage}%]"
-                        : "]");
+                int spdBuf = 0;
+                bool speedTestEnabled =
+                    GlobalContext.Config.EnableV2RayCheck &&
+                    (GlobalContext.Config.MinDownloadSpeedKb > 0 ||
+                     GlobalContext.Config.MinUploadSpeedKb > 0);
 
-                EnsureStatusLine();
-                RenderStatusLine();
+                if (speedTestEnabled && speedTestReader != null)
+                {
+                    spdBuf =
+                        (int)(speedTestReader.Count * 100.0 /
+                              Math.Max(GlobalContext.Config.SpeedTestBuffer, 1));
+                }
+
+                // ---------------------------------------------------------
+                // Build status line
+                // ---------------------------------------------------------
+                var sb = new StringBuilder(256);
+
+                sb.Append($"[Time {TimeSpan.FromSeconds(elapsedSeconds):hh\\:mm\\:ss}] ");
+                sb.Append($"[Prog {progressStr}] ");
+                sb.Append($"[Speed {scanSpeed:F0} ip/s] ");
+                sb.Append($"[Open {GlobalContext.TcpOpenTotal:N0}] ");
+                sb.Append($"[Sign {GlobalContext.SignaturePassed:N0}] ");
+
+                if (GlobalContext.Config.EnableV2RayCheck)
+                    sb.Append($"[V2Ray {GlobalContext.V2RayPassed:N0}] ");
+
+                if (speedTestEnabled)
+                    sb.Append($"[Spd {GlobalContext.SpeedTestPassed:N0}] ");
+
+                sb.Append("[Buf ");
+                sb.Append($"TCP {tcpBuf}%");
+
+                if (GlobalContext.Config.EnableV2RayCheck)
+                    sb.Append($" | V2R {v2Buf}%");
+
+                if (speedTestEnabled)
+                    sb.Append($" | SPD {spdBuf}%");
+
+                sb.Append("]");
+
+                // ---------------------------------------------------------
+                // Render
+                // ---------------------------------------------------------
+                lock (ConsoleLock)
+                {
+                    _lastStatusLine = sb.ToString();
+                    EnsureStatusLine();
+                    RenderStatusLine();
+                }
 
                 await Task.Delay(500, token);
             }
         }
         catch (TaskCanceledException)
         {
-            // Expected on shutdown
+            // Expected during shutdown
         }
     }
-
     // ---------------------------------------------------------------------
     // Status Line Control Helpers
     // ---------------------------------------------------------------------

@@ -12,17 +12,18 @@ using CFScanner.Utils;
 namespace CFScanner.Core;
 
 /// <summary>
-/// Contains worker implementations for the multi‑stage scanning pipeline.
+/// Contains worker implementations for the multi-stage scanning pipeline.
 ///
 /// Pipeline stages:
 ///   Stage 1 (Producer)  : Fast TCP reachability check (port 443)
 ///   Stage 2 (Consumer)  : TLS handshake + HTTP signature validation
-///   Stage 3 (Consumer)  : Real Xray/V2Ray proxy verification (optional)
+///   Stage 3 (Consumer)  : Real Xray/V2Ray connectivity verification (gstatic)
+///   Stage 4 (Consumer)  : Download / Upload speed test (reuses SAME Xray process)
 ///
 /// All stages communicate through bounded channels to:
 ///   • Apply backpressure
 ///   • Limit memory usage
-///   • Enable fast and cooperative cancellation
+///   • Enable cooperative cancellation
 /// </summary>
 public static class ScannerWorkers
 {
@@ -37,28 +38,36 @@ public static class ScannerWorkers
     public record LiveConnection(IPAddress Ip, TcpClient Client);
 
     /// <summary>
-    /// Represents an IP that passed signature detection,
-    /// along with its measured latency, ready for real proxy testing.
+    /// Represents an IP that passed TLS + HTTP signature detection.
     /// </summary>
     public record SignatureResult(IPAddress Ip, long SignatureLatency);
+
+    /// <summary>
+    /// Represents an IP whose Xray process has already passed
+    /// connectivity validation and is ready for bandwidth testing.
+    ///
+    /// Ownership of the Xray process is transferred to the speed test consumer.
+    /// </summary>
+    public record SpeedTestRequest(
+        IPAddress Ip,
+        long PingLatency,
+        Process XrayProcess,
+        int LocalPort
+    );
 
     // ---------------------------------------------------------------------
     // Stage 1: Producer (TCP Reachability)
     // ---------------------------------------------------------------------
 
     /// <summary>
-    /// Attempts to establish a TCP connection to port 443.
-    /// On success, the connected socket is forwarded to the signature stage.
-    ///
-    /// This stage is intentionally lightweight and aggressive, acting only
-    /// as a reachability filter to reduce downstream workload.
+    /// Attempts to establish a TCP connection to the target port.
+    /// On success, the live socket is forwarded to the signature stage.
     /// </summary>
     public static async Task ProducerWorker(
         IPAddress ip,
         ChannelWriter<LiveConnection> writer,
         CancellationToken ct)
     {
-        // Fast‑path exit: do not start new network activity if cancelling
         if (ct.IsCancellationRequested)
             return;
 
@@ -67,41 +76,27 @@ public static class ScannerWorkers
 
         try
         {
-            // Force immediate socket teardown on close to minimize TIME_WAIT
+            // Ensure immediate socket teardown on close
             client.LingerState = new LingerOption(true, 0);
 
-            // Link global cancellation with per‑connection timeout
-            using var cts =
-                CancellationTokenSource.CreateLinkedTokenSource(ct);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(GlobalContext.Config.TcpTimeoutMs);
 
-            // ConnectAsync honors cancellation in .NET 8+
             await client.ConnectAsync(ip, GlobalContext.Config.Port, cts.Token);
 
             if (client.Connected)
             {
                 GlobalContext.IncrementTcpOpenTotal();
-
-                try
-                {
-                    // Transfer ownership of the socket to Stage 2
-                    await writer.WriteAsync(
-                        new LiveConnection(ip, client), ct);
-                    handedOver = true;
-                }
-                catch (OperationCanceledException)
-                {
-                    // Channel closed due to shutdown; safe to ignore
-                }
+                await writer.WriteAsync(new LiveConnection(ip, client), ct);
+                handedOver = true;
             }
         }
         catch
         {
-            // Any failure here simply means the IP is not reachable
+            // Connection failure is expected for many IPs
         }
         finally
         {
-            // If the socket was not handed over, clean it up locally
             if (!handedOver)
             {
                 GlobalContext.IncrementScannedCount();
@@ -115,13 +110,8 @@ public static class ScannerWorkers
     // ---------------------------------------------------------------------
 
     /// <summary>
-    /// Consumes live TCP connections and performs:
-    ///   • TLS handshake with specific SNI
-    ///   • Minimal HTTP request
-    ///   • Cloudflare‑specific signature evaluation
-    ///
-    /// Includes a single retry with a fresh TCP connection to handle
-    /// half‑open or reused sockets.
+    /// Performs TLS handshake and HTTP signature validation.
+    /// Includes a single retry using a fresh TCP connection.
     /// </summary>
     public static async Task ConsumerWorker_Signature(
         ChannelReader<LiveConnection> reader,
@@ -134,7 +124,6 @@ public static class ScannerWorkers
             {
                 while (reader.TryRead(out var item))
                 {
-                    // Do not process buffered items during shutdown
                     if (ct.IsCancellationRequested)
                     {
                         item.Client.Dispose();
@@ -144,21 +133,18 @@ public static class ScannerWorkers
                     bool success = false;
                     long latency = -1;
 
-                    // Primary attempt using the handed‑over TCP connection
+                    // Primary attempt
                     using (var client = item.Client)
                     {
                         try
                         {
                             if (client.Connected)
-                            {
-                                (success, latency) =
-                                    await CheckSignatureLogic(client, ct);
-                            }
+                                (success, latency) = await CheckSignatureLogic(client, ct);
                         }
                         catch { }
                     }
 
-                    // Retry once with a fresh TCP connection if needed
+                    // Retry once if needed
                     if (!success && !ct.IsCancellationRequested)
                     {
                         try
@@ -168,72 +154,52 @@ public static class ScannerWorkers
                                 LingerState = new LingerOption(true, 0)
                             };
 
-                            using var cts =
-                                CancellationTokenSource
-                                    .CreateLinkedTokenSource(ct);
-                            cts.CancelAfter(
-                                GlobalContext.Config.TcpTimeoutMs);
+                            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                            cts.CancelAfter(GlobalContext.Config.TcpTimeoutMs);
 
-                            await retryClient.ConnectAsync(
-                                item.Ip, GlobalContext.Config.Port, cts.Token);
+                            await retryClient.ConnectAsync(item.Ip, GlobalContext.Config.Port, cts.Token);
 
                             if (retryClient.Connected)
-                            {
-                                (success, latency) =
-                                    await CheckSignatureLogic(
-                                        retryClient, ct);
-                            }
+                                (success, latency) = await CheckSignatureLogic(retryClient, ct);
                         }
                         catch { }
                     }
 
-                    // Successful signature match
                     if (success)
                     {
                         GlobalContext.IncrementSignaturePassed();
 
-                        // Forward to real proxy verification if enabled
-                        if (GlobalContext.Config.EnableV2RayCheck &&
-                            v2rayWriter != null)
+                        if (GlobalContext.Config.EnableV2RayCheck && v2rayWriter != null)
                         {
                             await v2rayWriter.WriteAsync(
-                                new SignatureResult(
-                                    item.Ip, latency),
+                                new SignatureResult(item.Ip, latency),
                                 ct);
                         }
                         else
                         {
-                            // Final success when V2Ray stage is disabled
-                            FileUtils.SaveResult(
-                                item.Ip.ToString(), latency);
-                            ConsoleInterface.PrintSuccess(
-                                item.Ip.ToString(),
-                                latency,
-                                "SIGNATURE");
+                            FileUtils.SaveResult(item.Ip.ToString(), latency);
+                            ConsoleInterface.PrintSuccess(item.Ip.ToString(), latency, "SIGNATURE");
                         }
                     }
 
-                    // Mark this IP as fully processed
                     GlobalContext.IncrementScannedCount();
                 }
             }
         }
-        catch (OperationCanceledException)
-        {
-            // Expected termination during Ctrl+C
-        }
+        catch (OperationCanceledException) { }
     }
 
     // ---------------------------------------------------------------------
-    // Stage 3: Consumer (Real Xray/V2Ray Verification)
+    // Stage 3: Consumer (V2Ray Connectivity Check)
     // ---------------------------------------------------------------------
 
     /// <summary>
-    /// Performs real end‑to‑end proxy validation using Xray/V2Ray.
-    /// Only IPs that passed signature detection reach this stage.
+    /// Starts Xray, verifies real proxy connectivity (gstatic 204),
+    /// and forwards the LIVE Xray process to the speed test stage.
     /// </summary>
     public static async Task ConsumerWorker_V2Ray(
         ChannelReader<SignatureResult> reader,
+        ChannelWriter<SpeedTestRequest>? speedTestWriter,
         CancellationToken ct)
     {
         try
@@ -242,84 +208,86 @@ public static class ScannerWorkers
             {
                 while (reader.TryRead(out var item))
                 {
-                    // Do not start expensive processes during shutdown
                     if (ct.IsCancellationRequested)
                         break;
 
                     await V2RayController.TestV2RayConnection(
                         item.Ip.ToString(),
-                        item.SignatureLatency);
+                        item.SignatureLatency,
+                        speedTestWriter,
+                        ct);
                 }
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) { }
+    }
+
+    // ---------------------------------------------------------------------
+    // Stage 4: Consumer (Speed Test)
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Performs download/upload tests using an already running Xray process.
+    /// This stage OWNS the process lifecycle and must always clean it up.
+    /// </summary>
+    public static async Task ConsumerWorker_SpeedTest(
+        ChannelReader<SpeedTestRequest> reader,
+        CancellationToken ct)
+    {
+        try
         {
-            // Normal shutdown path
+            while (await reader.WaitToReadAsync(ct))
+            {
+                while (reader.TryRead(out var item))
+                {
+                    if (ct.IsCancellationRequested)
+                        break;
+
+                    await V2RayController.RunSpeedTestAsync(
+                        item.Ip.ToString(),
+                        item.PingLatency,
+                        item.XrayProcess,
+                        item.LocalPort,
+                        ct);
+                }
+            }
         }
+        catch (OperationCanceledException) { }
     }
 
     // ---------------------------------------------------------------------
     // Signature Detection Logic
     // ---------------------------------------------------------------------
 
-    /// <summary>
-    /// Performs TLS handshake followed by a minimal HTTP HEAD request
-    /// and evaluates Cloudflare‑specific response characteristics.
-    ///
-    /// All network operations honor the provided CancellationToken
-    /// to ensure immediate abort on Ctrl+C.
-    /// </summary>
-    private static async Task<(bool Success, long Latency)>
-        CheckSignatureLogic(
-            TcpClient client,
-            CancellationToken parentToken)
+    private static async Task<(bool Success, long Latency)> CheckSignatureLogic(
+        TcpClient client,
+        CancellationToken parentToken)
     {
-        // Link global cancellation with a total signature timeout
-        using var linkedCts =
-            CancellationTokenSource
-                .CreateLinkedTokenSource(parentToken);
-        linkedCts.CancelAfter(
-            GlobalContext.Config.SignatureTotalTimeoutMs);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(parentToken);
+        linkedCts.CancelAfter(GlobalContext.Config.SignatureTotalTimeoutMs);
 
         var token = linkedCts.Token;
         var sw = Stopwatch.StartNew();
 
         try
         {
-            // Socket‑level timeouts as a defensive fallback
-            client.ReceiveTimeout =
-                GlobalContext.Config.SignatureTotalTimeoutMs;
-            client.SendTimeout =
-                GlobalContext.Config.SignatureTotalTimeoutMs;
+            client.ReceiveTimeout = GlobalContext.Config.SignatureTotalTimeoutMs;
+            client.SendTimeout = GlobalContext.Config.SignatureTotalTimeoutMs;
 
             using var netStream = client.GetStream();
+            using var sslStream = new SslStream(netStream, false, (_, _, _, _) => true);
 
-            // Certificate validation is intentionally disabled:
-            // this is a scanner, not a browser security model
-            using var sslStream =
-                new SslStream(netStream, false,
-                    (_, _, _, _) => true);
+            var authOptions = new SslClientAuthenticationOptions
+            {
+                TargetHost = GlobalContext.Config.BaseSni,
+                EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+                ApplicationProtocols = [SslApplicationProtocol.Http11],
+                CertificateRevocationCheckMode =
+                    System.Security.Cryptography.X509Certificates.X509RevocationMode.NoCheck
+            };
 
+            await sslStream.AuthenticateAsClientAsync(authOptions, token);
 
-            var authOptions =
-                new SslClientAuthenticationOptions
-                {
-                    TargetHost = GlobalContext.Config.BaseSni,
-                    EnabledSslProtocols =
-                        SslProtocols.Tls12 | SslProtocols.Tls13,
-                    ApplicationProtocols =
-                        [SslApplicationProtocol.Http11],
-                    CertificateRevocationCheckMode =
-                        System.Security.Cryptography
-                            .X509Certificates
-                            .X509RevocationMode.NoCheck
-                };
-
-            // TLS handshake (fully cancellable)
-            await sslStream.AuthenticateAsClientAsync(
-                authOptions, token);
-
-            // Minimal HTTP request (headers only)
             string request =
                 $"HEAD / HTTP/1.1\r\n" +
                 $"Host: {GlobalContext.Config.BaseSni}\r\n" +
@@ -328,30 +296,20 @@ public static class ScannerWorkers
                 "Accept-Encoding: identity\r\n" +
                 "Connection: close\r\n\r\n";
 
-            await sslStream.WriteAsync(
-                Encoding.ASCII.GetBytes(request),
-                token);
+            await sslStream.WriteAsync(Encoding.ASCII.GetBytes(request), token);
 
-            // Read response headers only
-            var buffer =
-                ArrayPool<byte>.Shared.Rent(4096);
+            var buffer = ArrayPool<byte>.Shared.Rent(4096);
             var sb = new StringBuilder();
 
             try
             {
                 while (true)
                 {
-                    int read =
-                        await sslStream.ReadAsync(
-                            buffer, token);
+                    int read = await sslStream.ReadAsync(buffer, token);
                     if (read <= 0) break;
 
-                    sb.Append(
-                        Encoding.ASCII.GetString(
-                            buffer, 0, read));
-
-                    if (sb.ToString()
-                        .Contains("\r\n\r\n"))
+                    sb.Append(Encoding.ASCII.GetString(buffer, 0, read));
+                    if (sb.ToString().Contains("\r\n\r\n"))
                         break;
                 }
             }
@@ -363,52 +321,29 @@ public static class ScannerWorkers
             sw.Stop();
             string headers = sb.ToString();
 
-            // Basic HTTP sanity validation
             if (string.IsNullOrWhiteSpace(headers) ||
-                !headers.StartsWith(
-                    "HTTP/",
-                    StringComparison.OrdinalIgnoreCase))
+                !headers.StartsWith("HTTP/", StringComparison.OrdinalIgnoreCase))
                 return (false, -1);
 
-            //int cfScore =
-            //    GetCloudflareHeaderScore(headers);
-            bool hasH3 =
-                HasAltSvcH3(headers);
-
-            if (!IsCloudflareResponse(headers)) 
+            if (!IsCloudflareResponse(headers))
                 return (false, -1);
-
-           //if (!hasH3) return (false, -1);
 
             return (true, sw.ElapsedMilliseconds);
         }
         catch
         {
-            // Includes OperationCanceledException and network failures
             return (false, -1);
         }
     }
 
-    /// <summary>
-    /// Determines whether the HTTP response most likely belongs
-    /// to a Cloudflare edge node based on strong identifying headers.
-    ///
-    /// This check intentionally relies only on high‑confidence
-    /// indicators to minimize false positives.
-    /// </summary>
     private static bool IsCloudflareResponse(string headers)
     {
         if (string.IsNullOrWhiteSpace(headers))
             return false;
 
-        // 1. Strict Success Check: Must be 200 OK
-        // We look for " 200 " to avoid matching numbers in other headers (e.g. Date: 2002)
         if (!headers.Contains(" 200 ", StringComparison.OrdinalIgnoreCase))
             return false;
 
-      
-
-        // 3. Basic Identity Check
         if (!headers.Contains("server: cloudflare", StringComparison.OrdinalIgnoreCase))
             return false;
 
@@ -418,15 +353,7 @@ public static class ScannerWorkers
         return true;
     }
 
-    /// <summary>
-    /// Determines whether the server advertises HTTP/3 support
-    /// via the Alt‑Svc response header.
-    /// </summary>
     private static bool HasAltSvcH3(string headers) =>
-        headers.Contains(
-            "alt-svc:",
-            StringComparison.OrdinalIgnoreCase) &&
-        headers.Contains(
-            "h3",
-            StringComparison.OrdinalIgnoreCase);
+        headers.Contains("alt-svc:", StringComparison.OrdinalIgnoreCase) &&
+        headers.Contains("h3", StringComparison.OrdinalIgnoreCase);
 }
