@@ -28,6 +28,7 @@ public static class Defaults
     // ---------------------------------------------------------------------
 
     public static string XrayExeName { get; set; } = "xray";
+    public const bool RandomSNI  = false;
 
     // ---------------------------------------------------------------------
     // Concurrency & Buffering
@@ -179,6 +180,11 @@ public class Config
 
     public bool EnableV2RayCheck =>
         !string.IsNullOrWhiteSpace(V2RayConfigPath);
+
+    public bool EnableSpeedTest =>
+        EnableV2RayCheck && (MinDownloadSpeedKb > 0 || MinUploadSpeedKb > 0);
+
+    public bool RandomSNI { get; set; } = Defaults.RandomSNI;
 
     // ---------------------------------------------------------------------
     // Timeouts (Milliseconds)

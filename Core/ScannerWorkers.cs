@@ -353,7 +353,5 @@ public static class ScannerWorkers
         return true;
     }
 
-    private static bool HasAltSvcH3(string headers) =>
-        headers.Contains("alt-svc:", StringComparison.OrdinalIgnoreCase) &&
-        headers.Contains("h3", StringComparison.OrdinalIgnoreCase);
+    
 }

@@ -17,7 +17,7 @@ public static class ConsoleInterface
     // ---------------------------------------------------------------------
 
     // Global lock to serialize all console cursor operations
-    private static readonly object ConsoleLock = new();
+    private static readonly Lock ConsoleLock = new();
 
     // Last rendered status line text
     private static volatile string _lastStatusLine = string.Empty;
@@ -156,7 +156,7 @@ public static class ConsoleInterface
         Console.WriteLine($" Signature Passed : {GlobalContext.SignaturePassed:N0}");
         if (GlobalContext.Config.EnableV2RayCheck)
             Console.WriteLine($" V2Ray Verified   : {GlobalContext.V2RayPassed:N0}");
-        if (GlobalContext.Config.MinDownloadSpeedKb != 0 || GlobalContext.Config.MinUploadSpeedKb != 0)
+        if (GlobalContext.Config.EnableSpeedTest)
             Console.WriteLine($" Speed Verified   : {GlobalContext.SpeedTestPassed:N0}");
         Console.WriteLine($" Duration         : {totalTime:hh\\:mm\\:ss}");
 
@@ -264,12 +264,9 @@ public static class ConsoleInterface
                 }
 
                 int spdBuf = 0;
-                bool speedTestEnabled =
-                    GlobalContext.Config.EnableV2RayCheck &&
-                    (GlobalContext.Config.MinDownloadSpeedKb > 0 ||
-                     GlobalContext.Config.MinUploadSpeedKb > 0);
+               
 
-                if (speedTestEnabled && speedTestReader != null)
+                if (GlobalContext.Config.EnableSpeedTest && speedTestReader != null)
                 {
                     spdBuf =
                         (int)(speedTestReader.Count * 100.0 /
@@ -290,7 +287,7 @@ public static class ConsoleInterface
                 if (GlobalContext.Config.EnableV2RayCheck)
                     sb.Append($"[V2Ray {GlobalContext.V2RayPassed:N0}] ");
 
-                if (speedTestEnabled)
+                if (GlobalContext.Config.EnableSpeedTest)
                     sb.Append($"[Spd {GlobalContext.SpeedTestPassed:N0}] ");
 
                 sb.Append("[Buf ");
@@ -299,10 +296,10 @@ public static class ConsoleInterface
                 if (GlobalContext.Config.EnableV2RayCheck)
                     sb.Append($" | V2R {v2Buf}%");
 
-                if (speedTestEnabled)
+                if (GlobalContext.Config.EnableSpeedTest)
                     sb.Append($" | SPD {spdBuf}%");
 
-                sb.Append("]");
+                sb.Append(']');
 
                 // ---------------------------------------------------------
                 // Render

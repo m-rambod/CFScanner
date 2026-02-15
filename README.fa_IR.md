@@ -3,7 +3,7 @@
 # CFScanner
 
 > **یک ابزار Cloudflare IPv4 scanner پرسرعت که از TCP و TLS/HTTP
-> signatures استفاده می‌کند و به صورت optional اعتبارسنجی واقعی از طریق
+> signatures استفاده می‌کند و به صورت اختیاری اعتبارسنجی واقعی از طریق
 > Xray/V2Ray انجام می‌دهد.**
 
 ![Platform](https://img.shields.io/badge/platform-win%20%7C%20linux%20%7C%20mac-lightgrey)
@@ -26,6 +26,9 @@ IP های پیدا شده واقعاً کار می‌کنند و توان عبو
         تشخیص Cloudflare fingerprint
     3.  **مرحله Real Proxy (اختیاری):** اعتبارسنجی IP با برقراری اتصال
         واقعی V2Ray/Xray
+    4.  **تست آپلود و دانلود:** اندازه‌گیری **download و upload
+        throughput واقعی** از طریق proxy تایید شده، با حداقل threshold
+        قابل تنظیم توسط کاربر
 -   **ورودی‌های متنوع:** امکان اسکن بر اساس **ASN** یا **File** یا
     **CIDR** یا **Single IP**
 -   **حذف‌های پیشرفته (Exclusions):** امکان exclude کردن ASN ها، IP range
@@ -128,25 +131,31 @@ cfscanner --asn cloudflare --tcp-workers 100 --signature-workers 40
 
 ### الزامات JSON Template
 
-باید یک فایل JSON معتبر بدهید. نکته مهم این است که بخش `outbounds` را به
-شکل زیر تغییر دهید:
+باید یک فایل JSON معتبر بدهید.
 
-1.  بخش `outbounds` را در JSON پیدا کنید
-2.  فیلد `address` مربوط به تنظیمات VLESS یا VMESS یا Trojan را پیدا
-    کنید
-3.  به جای IP واقعی مقدار `IP.IP.IP.IP` را قرار دهید
 
 > ⚠️ **نکات مهم**
 >
-> -   کانفیگ شما حتماً باید روی port `443` تنظیم شده باشد چون scanner
->     فقط روی این port کار می‌کند
-> -   فقط بخش **`outbounds`** لازم است و بخش‌هایی مثل `inbounds` یا
->     `routing` نیاز نیستند
+> -   config مربوط به V2Ray/Xray می‌تواند از هر HTTPS port پشتیبانی شده
+>     توسط Cloudflare استفاده کند\
+>     مانند: `443`، `2053`، `2083`، `2087`، `2096`، `8443`
+>
+> -   اگر port به صورت explicit با گزینه `-p` یا `--port` مشخص نشود،
+>     scanner در مراحل TCP و Signature به صورت default از port 443
+>     استفاده می‌کند.
+>
+> -   مرحله Real Xray verification همیشه از port تعریف شده در config
+>     استفاده می‌کند.
+>
+> -   این mismatch ممکن است نتیجه موفق تولید کند، اما pipeline ناسازگار
+>     خواهد بود.
+>
+> -   برای نتایج صحیح، همیشه همان port را در config و scanner مشخص کنید.
+>
+> -   فقط بخش `outbounds` لازم است. سایر بخش‌ها مانند `inbounds`،
+>     `routing` یا `dns` لازم نیستند.
 
-در زمان اسکن، برنامه به صورت داینامیک مقدار `IP.IP.IP.IP` را با IP های
-کاندید جایگزین می‌کند.
-
-### نمونه `config.json`
+### نمونه `config.json` (vless-ws-tls)
 
 ``` json
 {
@@ -171,14 +180,61 @@ cfscanner --asn cloudflare --tcp-workers 100 --signature-workers 40
         "network": "ws",
         "security": "tls",
         "tlsSettings": {
-          "serverName": "your.domain.com",
+          "serverName": "YOUR.DOMAIN.COM",
           "allowInsecure": false
         },
         "wsSettings": {
-          "path": "/yourpath",
+          "path": "/YOUR-PATH",
           "headers": {
-            "Host": "your.domain.com"
+            "Host": "YOUR.DOMAIN.COM"
           }
+        }
+      }
+    }
+  ]
+}
+```
+
+### نمونه `config.json` (vless-xhttp-tls)
+
+``` json
+{
+   "outbounds": [
+    {
+      "tag": "proxy",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "IP.IP.IP.IP",
+            "port": 8443,
+            "users": [
+              {
+                "id": "YOUR-UUID-HERE",
+                "security": "auto",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "tlsSettings": {
+          "allowInsecure": false,
+          "serverName": "YOUR.DOMAIN.COM",
+          "alpn": [
+            "h3",
+            "h2",
+            "http/1.1"
+          ],
+          "fingerprint": "chrome"
+        },
+        "xhttpSettings": {
+          "path": "/PATH",
+          "host": "YOUR.DOMAIN.COM",
+          "mode": "auto"
         }
       }
     }
@@ -223,6 +279,10 @@ cfscanner --asn cloudflare --v2ray-config config.json
   |`--v2ray-workers <N>`     |  تعداد V2Ray worker همزمان (بازه: 1-500). |
   |`--tcp-buffer <N>`        |  اندازه TCP channel buffer (بازه: 1-50000). |
   |`--v2ray-buffer <N>`      |  اندازه V2Ray channel buffer (بازه: 1-10000). اگر تنظیم نشود بر اساس workerها auto-scale می‌شود. |
+  |`--speed-dl <N>`          | حداقل سرعت دانلود مورد نیاز برای هر IP (مثلاً 50kb، 1mb). با تنظیم این گزینه تست سرعت دانلود فعال می‌شود.
+  |`--speed-ul <N>`          | حداقل سرعت آپلود مورد نیاز برای هر IP (مثلاً 50kb، 1mb). با تنظیم این گزینه تست سرعت آپلود فعال می‌شود.
+  
+ > ℹ️ مقدارهای بالایی برای `--speed-dl` و `--speed-ul` تنظیم نکنید. ترجیحاً فقط تست آپلود را با آستانه‌های پایین (مثلاً حدود 20kb) فعال کنید؛ مقادیر بالا در کنار تعداد زیاد worker می‌تواند پهنای باند کارت شبکه را اشباع کرده و باعث false negative شود.
 
 
 ### ⏱️ گزینه‌های Timeout (بر حسب میلی‌ثانیه)
@@ -264,7 +324,8 @@ cfscanner --asn cloudflare --v2ray-config config.json
   |`-h, --help`                |  نمایش help کوتاه                      |
   |`--help full`               |  نمایش help کامل با توضیحات جزئی‌تر     |
   | `-y, --yes, --no-confirm`  | رد کردن پیام تأیید و شروع فوری اسکن.   |
-
+  |`--random-sni`              | زمانی که در `serverName` از ساب‌دامنه استفاده شده باشد، برچسب اول SNI را به‌صورت تصادفی تغییر می‌دهد (نیازمند گواهی TLS از نوع wildcard است).     |
+  | `-p, --port            `   | پورتی که اسکنر تلاش می‌کند به آن متصل شود (باید با پورتی که در فایل کانفیگ JSON تعریف شده یکسان باشد).  |
 
 ## ⚠️ سلب مسئولیت
 
