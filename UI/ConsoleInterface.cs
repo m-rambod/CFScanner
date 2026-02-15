@@ -105,7 +105,7 @@ public static class ConsoleInterface
     /// <param name="ip">The verified IP address.</param>
     /// <param name="latency">Measured latency in milliseconds.</param>
     /// <param name="type">Stage identifier (e.g. SIGNATURE, REAL-XRAY).</param>
-    public static void PrintSuccess(string ip, long latency, string type,ConsoleColor color=ConsoleColor.Green)
+    public static void PrintSuccess(string ip, long latency, string type, ConsoleColor color = ConsoleColor.Green)
     {
         lock (ConsoleLock)
         {
@@ -154,7 +154,10 @@ public static class ConsoleInterface
         Console.WriteLine($" Total IPs        : {(GlobalContext.IsInfiniteMode ? "Infinite" : GlobalContext.TotalIps.ToString("N0"))}");
         Console.WriteLine($" Scanned          : {GlobalContext.ScannedCount:N0}");
         Console.WriteLine($" Signature Passed : {GlobalContext.SignaturePassed:N0}");
-        Console.WriteLine($" V2Ray Verified   : {GlobalContext.V2RayPassed:N0}");
+        if (GlobalContext.Config.EnableV2RayCheck)
+            Console.WriteLine($" V2Ray Verified   : {GlobalContext.V2RayPassed:N0}");
+        if (GlobalContext.Config.MinDownloadSpeedKb != 0 || GlobalContext.Config.MinUploadSpeedKb != 0)
+            Console.WriteLine($" Speed Verified   : {GlobalContext.SpeedTestPassed:N0}");
         Console.WriteLine($" Duration         : {totalTime:hh\\:mm\\:ss}");
 
         // Output file handling
