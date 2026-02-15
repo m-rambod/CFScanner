@@ -23,13 +23,15 @@ IPs are actually functional and capable of passing traffic.
         (Cloudflare fingerprinting).
     3.  **Real Proxy Stage (Optional):** Validates the IP by
         establishing a real V2Ray/Xray connection.
+    4.  **Speed Test Stage (Optional):** Measures real-world **download and upload
+       throughput** via the verified proxy, with user-defined minimum thresholds.
 -   **Flexible Inputs:** Scan by **ASN**, **File**, **CIDR**, or
     **Single IPs**.
 -   **Advanced Exclusions:** Exclude specific ASNs, IP ranges, or files
     to avoid scanning unwanted networks.
 -   **High Performance:** Fully asynchronous architecture with
     configurable workers and back-pressure buffers.
--   **Latency Testing:** Measures TCP/Handshake latency and sorts
+-   **Latency Testing:** Measures TCP/Handshake latency, optionally validates **download/upload speed** and sorts
     results.
 
 ------------------------------------------------------------------------
@@ -113,22 +115,34 @@ traffic.
 
 ### JSON Template Requirements
 
-You must provide a valid JSON configuration file. Crucially, you need to modify the `outbounds` section of your config:
-
-1. Locate the `outbounds` object in your JSON.
-2. Find the `address` field of your VLESS/VMESS/Trojan configuration.
-3. Replace the actual IP address with the placeholder: `IP.IP.IP.IP`
+You must provide a valid working JSON configuration file.
 
 > ⚠️ **Important Notes**
 >
-> - Your config **must be set to port `443`**, as the scanner only works on this port.
-> - You only need to provide the **`outbounds` section** of your config.  
->   Other sections like `inbounds`, `routing`, etc. are **not required**.
+> - Your V2Ray/Xray config may use **any HTTPS port supported by Cloudflare**
+>   (e.g. `443`, `2053`, `2083`, `2087`, `2096`, `8443`).
+>
+> - If the port is **not explicitly specified** via `-p` or `--port`,
+>   the scanner defaults to **port 443** for the **TCP and Signature stages**.
+>   The **Real Xray verification stage**, however, always uses the port
+>   defined inside the V2Ray/Xray configuration.
+>
+> - This port mismatch **may still produce successful results**,
+>   but it leads to an **inconsistent verification pipeline**
+>   where early-stage checks and real proxy validation are performed
+>   against different ports.
+>
+> - For correct and deterministic results, always specify the same port
+>   in both the V2Ray/Xray config and the scanner (`-p` / `--port`).
+>
+> - You only need to provide the **`outbounds` section** of your config.
+>   Other sections such as `inbounds`, `routing`, or `dns`
+>   are **not required** and are generated automatically.
 
-The scanner will dynamically replace `IP.IP.IP.IP` with the candidate IP during the scan.
 
 
-### Sample `config.json`
+
+### Sample `config.json` (vless-ws-tls)
 ``` json
 {
   "outbounds": [
@@ -137,7 +151,7 @@ The scanner will dynamically replace `IP.IP.IP.IP` with the candidate IP during 
       "settings": {
         "vnext": [
           {
-            "address": "IP.IP.IP.IP",
+            "address": "YOUR-WEBSITE-OR-CLOUDFLARE-IP",
             "port": 443,
             "users": [
               {
@@ -152,14 +166,60 @@ The scanner will dynamically replace `IP.IP.IP.IP` with the candidate IP during 
         "network": "ws",
         "security": "tls",
         "tlsSettings": {
-          "serverName": "your.domain.com",
+          "serverName": "YOUR.DOMAIN.COM",
           "allowInsecure": false
         },
         "wsSettings": {
-          "path": "/yourpath",
+          "path": "/YOUR-PATH",
           "headers": {
-            "Host": "your.domain.com"
+            "Host": "YOUR.DOMAIN.COM"
           }
+        }
+      }
+    }
+  ]
+}
+```
+
+### Sample `config.json` (vless-xhttp-tls)
+``` json
+{
+   "outbounds": [
+    {
+      "tag": "proxy",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "YOUR-WEBSITE-OR-CLOUDFLARE-IP",
+            "port": 8443,
+            "users": [
+              {
+                "id": "YOUR-UUID-HERE",
+                "security": "auto",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "tlsSettings": {
+          "allowInsecure": false,
+          "serverName": "YOUR.DOMAIN.COM",
+          "alpn": [
+            "h3",
+            "h2",
+            "http/1.1"
+          ],
+          "fingerprint": "chrome"
+        },
+        "xhttpSettings": {
+          "path": "/PATH",
+          "host": "YOUR.DOMAIN.COM",
+          "mode": "auto"
         }
       }
     }
@@ -202,6 +262,9 @@ cfscanner --asn cloudflare --v2ray-config config.json
 | `--v2ray-workers <N>`      | Number of concurrent V2Ray workers (range: 1-500).                          |
 | `--tcp-buffer <N>`         | TCP channel buffer size (range: 1-50000).                                   |
 | `--v2ray-buffer <N>`       | V2Ray channel buffer size (range: 1-10000). Buffers auto-scale based on worker counts if not explicitly set. |
+| `--speed-dl <N>`           | Minimum required download speed per IP (e.g. 50kb, 1mb). Enables download speed testing. |
+| `--speed-ul <N>`           | Minimum required upload speed per IP (e.g. 50kb, 1mb). Enables upload speed testing. |
+> ℹ️ Do not set high values for `--speed-dl` and  `--speed-ul`. Prefer upload-only testing with low thresholds (e.g. ~20kb); high limits with many concurrent workers can saturate NIC bandwidth and cause false negatives.
 
 ### ⏱️ Timeout Options (Milliseconds)
 
@@ -239,6 +302,8 @@ cfscanner --asn cloudflare --v2ray-config config.json
 | `-h, --help`               | Display a short help message.                                              |
 | `--help full`              | Display the full help message with detailed descriptions.                  |
 | `-y, --yes, --no-confirm`  | Skip confirmation prompt and start scanning immediately.                   |
+| `--random-sni`             | Randomizes the first SNI label when serverName is a subdomain (wildcard TLS certificate required). |
+| `-p, --port`               | Target port to scan (must match the port defined in the JSON config). |
 
 ------------------------------------------------------------------------
 

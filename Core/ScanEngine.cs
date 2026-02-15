@@ -5,30 +5,42 @@ using CFScanner.UI;
 namespace CFScanner.Core;
 
 /// <summary>
-/// Coordinates the entire scanning pipeline.
-/// Manages channel lifecycles, worker pools, backpressure,
-/// and graceful startup/shutdown of all stages.
+/// Orchestrates the entire multi-stage scanning pipeline.
+/// Responsible for channel lifecycle management, worker coordination,
+/// backpressure control, and graceful startup/shutdown of all stages.
 /// </summary>
 public static class ScanEngine
 {
     /// <summary>
-    /// Executes the full multi-stage scanning workflow.
+    /// Executes the complete scanning workflow across all enabled stages.
     /// </summary>
     /// <param name="ipSource">
-    /// Source of IP addresses to scan
-    /// (finite fixed-range collection or infinite random generator).
+    /// Source of IP addresses to scan.
+    /// Can be a finite fixed-range collection or an infinite generator.
     /// </param>
     public static async Task RunScanAsync(IEnumerable<IPAddress> ipSource)
     {
-        if (GlobalContext.Config.EnableV2RayCheck)
+        // ---------------------------------------------------------------------
+        // 0. Configuration & Runtime Mode Detection
+        // ---------------------------------------------------------------------
+
+        bool v2rayEnabled = GlobalContext.Config.EnableV2RayCheck;
+        bool speedTestEnabled = GlobalContext.Config.EnableSpeedTest;
+
+        if (v2rayEnabled)
             Console.WriteLine("[Mode] V2Ray verification ENABLED");
+
+        if (speedTestEnabled)
+            Console.WriteLine("[Mode] Speed Test ENABLED");
 
         Console.WriteLine(new string('-', 60));
         GlobalContext.Stopwatch.Start();
 
         // ---------------------------------------------------------------------
-        // 1. Channel Initialization (Backpressure Control)
+        // 1. Channel Initialization (Backpressure & Flow Control)
         // ---------------------------------------------------------------------
+
+        // Stage 1 → Stage 2: TCP connection results
         var tcpChannel = Channel.CreateBounded<ScannerWorkers.LiveConnection>(
             new BoundedChannelOptions(GlobalContext.Config.TcpChannelBuffer)
             {
@@ -37,36 +49,45 @@ public static class ScanEngine
                 FullMode = BoundedChannelFullMode.Wait
             });
 
-        Channel<ScannerWorkers.SignatureResult>? v2rayChannel = null;
-        if (GlobalContext.Config.EnableV2RayCheck)
-        {
-            v2rayChannel =
-                Channel.CreateBounded<ScannerWorkers.SignatureResult>(
-                    new BoundedChannelOptions(
-                        GlobalContext.Config.V2RayChannelBuffer)
-                    {
-                        SingleWriter = false,
-                        SingleReader = false,
-                        FullMode = BoundedChannelFullMode.Wait
-                    });
-        }
+        // Stage 2 → Stage 3: Signature validation results
+        Channel<ScannerWorkers.SignatureResult>? v2rayChannel = v2rayEnabled
+            ? Channel.CreateBounded<ScannerWorkers.SignatureResult>(
+                new BoundedChannelOptions(GlobalContext.Config.V2RayChannelBuffer)
+                {
+                    SingleWriter = false,
+                    SingleReader = false,
+                    FullMode = BoundedChannelFullMode.Wait
+                })
+            : null;
+
+        // Stage 3 → Stage 4: Verified endpoints for speed testing
+        Channel<ScannerWorkers.SpeedTestRequest>? speedTestChannel = speedTestEnabled
+            ? Channel.CreateBounded<ScannerWorkers.SpeedTestRequest>(
+                new BoundedChannelOptions(GlobalContext.Config.SpeedTestBuffer)
+                {
+                    SingleWriter = false,
+                    SingleReader = false,
+                    FullMode = BoundedChannelFullMode.Wait
+                })
+            : null;
 
         // ---------------------------------------------------------------------
-        // 2. Start UI Monitor
+        // 2. UI Monitoring Task
         // ---------------------------------------------------------------------
+        // The monitor observes channel readers and terminates via cancellation.
         var monitorTask = Task.Run(() =>
             ConsoleInterface.MonitorUi(
                 tcpChannel.Reader,
                 v2rayChannel?.Reader,
+                speedTestChannel?.Reader,
                 GlobalContext.Cts.Token));
 
         // ---------------------------------------------------------------------
-        // 3. Stage 2 Consumers (Signature/Signature Workers)
+        // 3. Stage 2 Workers (Signature Analysis)
         // ---------------------------------------------------------------------
-        var signatureTasks =
-            new Task[GlobalContext.Config.SignatureWorkers];
+        var signatureTasks = new Task[GlobalContext.Config.SignatureWorkers];
 
-        for (int i = 0; i < GlobalContext.Config.SignatureWorkers; i++)
+        for (int i = 0; i < signatureTasks.Length; i++)
         {
             signatureTasks[i] = Task.Run(() =>
                 ScannerWorkers.ConsumerWorker_Signature(
@@ -76,26 +97,44 @@ public static class ScanEngine
         }
 
         // ---------------------------------------------------------------------
-        // 4. Stage 3 Consumers (Real V2Ray/Xray Verification)
+        // 4. Stage 3 Workers (Real V2Ray/Xray Validation)
         // ---------------------------------------------------------------------
         Task[] v2rayTasks = [];
-        if (GlobalContext.Config.EnableV2RayCheck &&
-            v2rayChannel != null)
-        {
-            v2rayTasks =
-                new Task[GlobalContext.Config.V2RayWorkers];
 
-            for (int i = 0; i < GlobalContext.Config.V2RayWorkers; i++)
+        if (v2rayEnabled && v2rayChannel != null)
+        {
+            v2rayTasks = new Task[GlobalContext.Config.V2RayWorkers];
+
+            for (int i = 0; i < v2rayTasks.Length; i++)
             {
                 v2rayTasks[i] = Task.Run(() =>
                     ScannerWorkers.ConsumerWorker_V2Ray(
                         v2rayChannel.Reader,
+                        speedTestChannel?.Writer,
                         GlobalContext.Cts.Token));
             }
         }
 
         // ---------------------------------------------------------------------
-        // 5. Stage 1 Producer (TCP Connection Attempts)
+        // 5. Stage 4 Workers (Throughput & Latency Testing)
+        // ---------------------------------------------------------------------
+        Task[] speedTestTasks = [];
+
+        if (speedTestEnabled && speedTestChannel != null)
+        {
+            speedTestTasks = new Task[GlobalContext.Config.SpeedTestWorkers];
+
+            for (int i = 0; i < speedTestTasks.Length; i++)
+            {
+                speedTestTasks[i] = Task.Run(() =>
+                    ScannerWorkers.ConsumerWorker_SpeedTest(
+                        speedTestChannel.Reader,
+                        GlobalContext.Cts.Token));
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // 6. Stage 1 Producer (Parallel TCP Connection Attempts)
         // ---------------------------------------------------------------------
         try
         {
@@ -103,8 +142,7 @@ public static class ScanEngine
                 ipSource,
                 new ParallelOptions
                 {
-                    MaxDegreeOfParallelism =
-                        GlobalContext.Config.TcpWorkers,
+                    MaxDegreeOfParallelism = GlobalContext.Config.TcpWorkers,
                     CancellationToken = GlobalContext.Cts.Token
                 },
                 async (ip, ct) =>
@@ -115,33 +153,37 @@ public static class ScanEngine
         }
         catch (OperationCanceledException)
         {
-            // Expected when cancellation is requested (Ctrl+C)
+            // Expected during controlled shutdown (e.g. Ctrl+C).
         }
 
         // ---------------------------------------------------------------------
-        // 6. Graceful Shutdown Sequence
+        // 7. Graceful Shutdown (Cascading Channel Completion)
         // ---------------------------------------------------------------------
-
-        // ✅ FIX: Only wait for workers if we are NOT cancelling (Normal Finish)
-        // If user pressed Ctrl+C, we skip this block and exit immediately.
         if (!GlobalContext.Cts.IsCancellationRequested)
         {
-            // Signal Stage 2 that no more TCP connections will arrive
+            // Signal Stage 2: no more TCP results
             tcpChannel.Writer.Complete();
             await Task.WhenAll(signatureTasks);
 
-            // Signal Stage 3 (if active) that no more signature results will arrive
+            // Signal Stage 3: no more signature results
             if (v2rayChannel != null)
             {
                 v2rayChannel.Writer.Complete();
                 await Task.WhenAll(v2rayTasks);
             }
 
-            // Cancel the UI loop manually since we finished normally
+            // Signal Stage 4: no more verified endpoints
+            if (speedTestChannel != null)
+            {
+                speedTestChannel.Writer.Complete();
+                await Task.WhenAll(speedTestTasks);
+            }
+
+            // Explicitly terminate UI monitoring after normal completion
             GlobalContext.Cts.Cancel();
         }
 
-        // Stop UI monitoring and ensure all background tasks exit
+        // Ensure UI task exits cleanly
         try { await monitorTask; } catch { }
 
         ConsoleInterface.HideStatusLine();

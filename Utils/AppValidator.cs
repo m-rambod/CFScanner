@@ -1,29 +1,15 @@
-﻿using CFScanner.UI;
+﻿using System.Text.Json;
+using CFScanner.UI;
 
 namespace CFScanner.Utils;
 
-/// <summary>
-/// Performs pre-flight validation checks before starting the scan.
-/// This includes environment safety checks (VPN/Proxy),
-/// input file validation, and required resource availability.
-/// </summary>
 public static class AppValidator
 {
-    /// <summary>
-    /// Checks whether the scanner is running behind a VPN or proxy.
-    /// If a potential risk is detected, the user is warned and asked
-    /// for explicit confirmation before continuing.
-    /// </summary>
-    /// <returns>
-    /// True if execution should continue; false if the user cancels.
-    /// </returns>
     public static bool CheckVpnRisk()
     {
-        // No risk detected → safe to continue
         if (!VpnDetector.ShouldWarn())
             return true;
 
-        // Warn the user and request explicit confirmation
         return ConsoleInterface.PrintWarning(
             "Potential VPN or proxy connection detected.\n" +
             "Scanning through a VPN may cause abuse reports or IP bans.\n" +
@@ -31,14 +17,6 @@ public static class AppValidator
             requireConfirmation: true);
     }
 
-    /// <summary>
-    /// Validates all user-provided inputs and required runtime resources.
-    /// This includes input/exclude files, V2Ray configuration, and
-    /// ASN database availability when ASN-based modes are used.
-    /// </summary>
-    /// <returns>
-    /// True if all validations pass; otherwise false.
-    /// </returns>
     public static bool ValidateInputs()
     {
         bool hasError = false;
@@ -69,23 +47,23 @@ public static class AppValidator
         // -----------------------------------------------------------------
         if (GlobalContext.Config.EnableV2RayCheck)
         {
-            if (!File.Exists(GlobalContext.Config.V2RayConfigPath!))
+            var configPath = GlobalContext.Config.V2RayConfigPath!;
+
+            if (!File.Exists(configPath))
             {
                 ConsoleInterface.PrintError(
-                    $"V2Ray config file not found: {GlobalContext.Config.V2RayConfigPath}");
+                    $"V2Ray config file not found: {configPath}");
                 hasError = true;
             }
-            else if (!File.ReadAllText(GlobalContext.Config.V2RayConfigPath!)
-                         .Contains("IP.IP.IP.IP"))
+            else
             {
-                ConsoleInterface.PrintError(
-                    "V2Ray config file must contain the placeholder 'IP.IP.IP.IP'.");
-                hasError = true;
+                // Port consistency check (WARNING ONLY)
+                TryWarnOnV2RayPortMismatch(configPath);
             }
         }
 
         // -----------------------------------------------------------------
-        // ASN database validation (required for ASN include/exclude modes)
+        // ASN database validation
         // -----------------------------------------------------------------
         bool usesAsn =
             GlobalContext.Config.InputAsns.Count > 0 ||
@@ -116,5 +94,56 @@ public static class AppValidator
         }
 
         return !hasError;
+    }
+
+    // ---------------------------------------------------------------------
+    // Helper: V2Ray Port Consistency Warning
+    // ---------------------------------------------------------------------
+
+    private static void TryWarnOnV2RayPortMismatch(string configPath)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(configPath));
+
+            if (!doc.RootElement.TryGetProperty("outbounds", out var outbounds) ||
+                outbounds.GetArrayLength() == 0)
+                return;
+
+            var outbound = outbounds[0];
+
+            if (!outbound.TryGetProperty("settings", out var settings) ||
+                !settings.TryGetProperty("vnext", out var vnext) ||
+                vnext.GetArrayLength() == 0)
+                return;
+
+            var target = vnext[0];
+
+            if (!target.TryGetProperty("port", out var portProp))
+                return;
+
+            int configPort = portProp.GetInt32();
+            int scannerPort = GlobalContext.Config.Port;
+
+            if (configPort == scannerPort)
+                return;
+
+            bool continueScan = ConsoleInterface.PrintWarning(
+                "V2Ray port mismatch detected:\n" +
+                $"  • Scanner port : {scannerPort}\n" +
+                $"  • Config port  : {configPort}\n\n" +
+                "TCP and Signature stages will use the scanner port,\n" +
+                "while Real Xray verification will use the config port.\n" +
+                "This may work, but results may be inconsistent.\n\n" +
+                "Do you want to continue anyway?",
+                requireConfirmation: true);
+
+            if (!continueScan)
+                Environment.Exit(1);
+        }
+        catch
+        {
+            // Silently ignore malformed or non-standard configs
+        }
     }
 }

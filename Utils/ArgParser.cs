@@ -9,6 +9,7 @@ namespace CFScanner.Utils;
 /// </summary>
 public static class ArgParser
 {
+
     /// <summary>
     /// Parses arguments, applies configuration, and validates inputs.
     /// </summary>
@@ -28,6 +29,7 @@ public static class ArgParser
         // Track explicit buffer settings to avoid auto-scaling them later if user set them
         bool tcpBufferExplicitlySet = false;
         bool v2rayBufferExplicitlySet = false;
+        bool speedBufferExplicitlySet = false;
 
         // 3. Parse and Override Configuration
         for (int i = 0; i < args.Length; i++)
@@ -67,6 +69,26 @@ public static class ArgParser
                     i++;
                     break;
 
+                // --- Speed Test Configuration ---
+                case "--speed-dl":
+                    GlobalContext.Config.MinDownloadSpeedKb = ParseBandwidthKb(value, option);
+                    i++;
+                    break;
+                case "--speed-ul":
+                    GlobalContext.Config.MinUploadSpeedKb = ParseBandwidthKb(value, option);
+                    i++;
+                    break;
+                case "--speed-workers":
+                    GlobalContext.Config.SpeedTestWorkers = ParseInt(value, option, 1, 50);
+                    i++;
+                    break;
+                case "--speed-buffer":
+                    GlobalContext.Config.SpeedTestBuffer = ParseInt(value, option, 1, 100);
+                    speedBufferExplicitlySet = true;
+                    i++;
+                    break;
+
+
                 // --- Timeouts ---
                 case "--tcp-timeout": GlobalContext.Config.TcpTimeoutMs = ParseInt(value, option, 100, 30000); i++; break;
                 case "--tls-timeout": GlobalContext.Config.TlsTimeoutMs = ParseInt(value, option, 100, 30000); i++; break;
@@ -81,14 +103,13 @@ public static class ArgParser
                 case "--sort": GlobalContext.Config.SortResults = true; break;
                 case "-nl": case "--no-latency": GlobalContext.Config.SaveLatency = false; break;
                 case "-s": case "--shuffle": GlobalContext.Config.Shuffle = true; break;
+                case "--random-sni": GlobalContext.Config.RandomSNI = true; break;
 
                 // --- Profiles (Already handled in pre-scan, skip here) ---
                 case "--fast": case "--slow": case "--extreme": case "--normal": break;
-                case "-y":
-                case "--yes":
-                case "--no-confirm":
-                    skipConfirmation = true;
-                    break;
+                case "-y": case "--yes": case "--no-confirm": skipConfirmation = true; break;
+                case "-p": case "--port": GlobalContext.Config.Port = ParsePort(value, option); i++; break;
+
                 default: ErrorAndExit($"Unknown option: {args[i]}"); return false;
             }
         }
@@ -100,6 +121,11 @@ public static class ArgParser
 
         if (!v2rayBufferExplicitlySet)
             GlobalContext.Config.V2RayChannelBuffer = Math.Max(GlobalContext.Config.V2RayWorkers * 3, 20);
+
+        // Smart default for SpeedTest Buffer:
+        // Ideally should be (Workers + 1) to keep pipeline flowing but prevent resource bloat.
+        if (!speedBufferExplicitlySet)
+            GlobalContext.Config.SpeedTestBuffer = GlobalContext.Config.SpeedTestWorkers + 1;
 
         // 5. User Feedback
         if (!skipConfirmation) DisplayProfileSummary(profile);
@@ -124,6 +150,26 @@ public static class ArgParser
         return ScanProfile.Normal;
     }
 
+    /// <summary>
+    /// Allowed cloudflare HTTPS ports
+    /// </summary>
+    private static readonly HashSet<int> AllowedPorts =
+    [
+        443,2053,2083,2087,2096,8443
+    ];
+    /// <summary>
+    /// Extract Port Number from arguments.
+    /// </summary>
+    private static int ParsePort(string? value, string option)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            ErrorAndExit($"Missing value for option: {option}");
+        if (!int.TryParse(value, out int port))
+            ErrorAndExit($"Invalid port value: {value} for option: {option}");
+        if (!AllowedPorts.Contains(port))
+            ErrorAndExit($"Port {port} is not allowed. Allowed ports are: {string.Join(", ", AllowedPorts)}");
+        return port;
+    }
     /// <summary>
     /// Applies base settings for the selected profile.
     /// </summary>
@@ -185,49 +231,111 @@ public static class ArgParser
     {
         var config = GlobalContext.Config;
 
-        Console.Clear(); // Optional: Clears previous clutter for a clean start
+        Console.Clear();
         Console.ForegroundColor = ConsoleColor.Cyan;
         Console.WriteLine("============================================================");
         Console.WriteLine($" SCAN CONFIGURATION | PROFILE: {profile.ToString().ToUpper()}");
         Console.WriteLine("============================================================");
         Console.ResetColor();
 
+        // -----------------------------------------------------------------
         // 1. Concurrency & Buffers
+        // -----------------------------------------------------------------
         Console.ForegroundColor = ConsoleColor.Yellow;
         Console.WriteLine(" [Concurrency & Buffers]");
         Console.ResetColor();
-        Console.WriteLine($"   TCP Workers:           {config.TcpWorkers,-6} | Buffer: {config.TcpChannelBuffer}");
-        Console.WriteLine($"   Signature Workers:     {config.SignatureWorkers,-6} | (Internal)");
-        Console.WriteLine($"   V2Ray Workers:         {config.V2RayWorkers,-6} | Buffer: {config.V2RayChannelBuffer}");
 
-        // 2. Timeouts
+        Console.WriteLine(
+            $"   TCP Workers:           {config.TcpWorkers,-6} | Buffer: {config.TcpChannelBuffer}");
+
+        Console.WriteLine(
+            $"   Signature Workers:     {config.SignatureWorkers,-6} | (Internal)");
+
+        if (config.EnableV2RayCheck)
+        {
+            Console.WriteLine(
+                $"   V2Ray Workers:         {config.V2RayWorkers,-6} | Buffer: {config.V2RayChannelBuffer}");
+        }
+
+        // -----------------------------------------------------------------
+        // 2. Speed Test Summary
+        // -----------------------------------------------------------------
+        if (config.MinDownloadSpeedKb > 0 || config.MinUploadSpeedKb > 0)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("\n [Speed Test Criteria]");
+            Console.ResetColor();
+
+            string minDl =
+                config.MinDownloadSpeedKb > 0
+                    ? $"{config.MinDownloadSpeedKb} KB/s"
+                    : "N/A";
+
+            string minUl =
+                config.MinUploadSpeedKb > 0
+                    ? $"{config.MinUploadSpeedKb} KB/s"
+                    : "N/A";
+
+            Console.WriteLine(
+                $"   Min Download:     {minDl,-10} | Workers: {config.SpeedTestWorkers}");
+
+            Console.WriteLine(
+                $"   Min Upload:       {minUl,-10} | Buffer:  {config.SpeedTestBuffer}");
+        }
+
+        // -----------------------------------------------------------------
+        // 3. Timeouts
+        // -----------------------------------------------------------------
         Console.ForegroundColor = ConsoleColor.Yellow;
         Console.WriteLine("\n [Timeouts (ms)]");
         Console.ResetColor();
-        Console.WriteLine($"   TCP Connect:      {config.TcpTimeoutMs,-6} | TLS Handshake: {config.TlsTimeoutMs}");
-        Console.WriteLine($"   HTTP Read:        {config.HttpReadTimeoutMs,-6} | Signature Total:  {config.SignatureTotalTimeoutMs}");
-        Console.WriteLine($"   Xray Start:       {config.XrayStartupTimeoutMs,-6} | Xray Conn:   {config.XrayConnectionTimeoutMs}");
-        Console.WriteLine($"   Xray Kill:        {config.XrayProcessKillTimeoutMs,-6}");
 
-        // 3. Behavior & Settings
+        Console.WriteLine(
+            $"   TCP Connect:      {config.TcpTimeoutMs,-6} | TLS Handshake: {config.TlsTimeoutMs}");
+
+        Console.WriteLine(
+            $"   HTTP Read:        {config.HttpReadTimeoutMs,-6} | Signature Total:  {config.SignatureTotalTimeoutMs}");
+
+        if (config.EnableV2RayCheck)
+        {
+            Console.WriteLine(
+                $"   Xray Start:       {config.XrayStartupTimeoutMs,-6} | Xray Conn:   {config.XrayConnectionTimeoutMs}");
+
+            Console.WriteLine(
+                $"   Xray Kill:        {config.XrayProcessKillTimeoutMs,-6}");
+        }
+
+        // -----------------------------------------------------------------
+        // 4. Behavior & Settings
+        // -----------------------------------------------------------------
         Console.ForegroundColor = ConsoleColor.Yellow;
         Console.WriteLine("\n [Settings]");
         Console.ResetColor();
 
-        string v2rayStatus = string.IsNullOrWhiteSpace(config.V2RayConfigPath) ? "Disabled" : "Enabled";
+        string v2rayStatus =
+            config.EnableV2RayCheck ? "Enabled" : "Disabled";
+
+        string randomSniPart =
+            config.EnableV2RayCheck
+                ? $"   | Random SNI: {(config.RandomSNI ? "Enabled" : "Disabled")}"
+                : string.Empty;
+
         Console.WriteLine($"   V2Ray Check:      {v2rayStatus}");
         Console.WriteLine($"   Shuffle IPs:      {config.Shuffle,-6} | Sort Results: {config.SortResults}");
         Console.WriteLine($"   Save Latency:     {config.SaveLatency}");
+        Console.WriteLine($"   Port Number:      {config.Port}{randomSniPart}");
 
         Console.WriteLine("============================================================");
 
-        // Wait for user confirmation
+        // -----------------------------------------------------------------
+        // Confirmation
+        // -----------------------------------------------------------------
         Console.ForegroundColor = ConsoleColor.Green;
         Console.Write(" Press any key to start scanning...");
         Console.ResetColor();
 
-        Console.ReadKey(true); // 'true' prevents the key character from printing to console
-        Console.WriteLine();   // Move to next line after key press
+        Console.ReadKey(true);
+        Console.WriteLine();
     }
 
     /// <summary>
@@ -276,6 +384,40 @@ public static class ArgParser
         return result;
     }
 
+    /// <summary>
+    /// Parses bandwidth strings like "2mb", "500kb" into integer Kilobytes.
+    /// Defaults to KB if no suffix is provided.
+    /// </summary>
+    private static int ParseBandwidthKb(string? value, string option)
+    {
+        RequireValue(value, option);
+
+        string cleanValue = value!.Trim().ToLowerInvariant();
+        double multiplier = 1; // Default is KB
+        string numberPart = cleanValue;
+
+        if (cleanValue.EndsWith("mb") || cleanValue.EndsWith("m"))
+        {
+            multiplier = 1024;
+            numberPart = cleanValue.TrimEnd('m', 'b');
+        }
+        else if (cleanValue.EndsWith("kb") || cleanValue.EndsWith("k"))
+        {
+            multiplier = 1;
+            numberPart = cleanValue.TrimEnd('k', 'b');
+        }
+
+        if (!double.TryParse(numberPart, NumberStyles.Any, CultureInfo.InvariantCulture, out double result))
+        {
+            ErrorAndExit($"Invalid bandwidth value for '{option}': {value}. Examples: 500kb, 2mb.");
+        }
+
+        int finalKb = (int)(result * multiplier);
+        if (finalKb < 0) ErrorAndExit($"Value for '{option}' cannot be negative.");
+
+        return finalKb;
+    }
+
     private static void ErrorAndExit(string message)
     {
         ConsoleInterface.PrintError(message);
@@ -302,11 +444,13 @@ INPUT:
 
 OPTIONS:
   -vc <CONFIG>   Enable real V2Ray verification
+  --speed-dl     Min download speed (e.g., 2mb, 500kb)
+  --speed-ul     Min upload speed (e.g., 1mb)
   --sort         Sort results by latency
   --manual       Show full documentation
 
 EXAMPLE:
-  CFScanner --range 104.16.0.0/24 --fast --sort
+  CFScanner --range 104.16.0.0/24 --fast --speed-dl 2mb
 ");
     }
 
@@ -315,54 +459,112 @@ EXAMPLE:
         Console.ForegroundColor = ConsoleColor.Cyan;
         Console.WriteLine("CFScanner - Advanced Cloudflare IP Scanner");
         Console.WriteLine("Author: Mohammad Rambod");
-        Console.WriteLine("Educational & Research purposes only");
+        Console.WriteLine("For educational and research purposes only");
         Console.ResetColor();
 
-        Console.WriteLine($@"
+        Console.WriteLine(@"
 DESCRIPTION
 -----------
 High-performance IPv4 scanner for Cloudflare edge nodes.
-Pipeline: TCP Check -> TLS Signature -> V2Ray Verification.
+
+Scanning Pipeline:
+  TCP Connectivity
+    -> TLS / HTTP Signature
+      -> Real Xray (V2Ray) Verification (Optional)
+        -> Speed Test (Optional)
+
+Profiles define baseline performance parameters and can be
+manually overridden by explicit command-line options.
 
 PROFILES (PRESETS)
 ------------------
-  --slow      Stable/Legacy 
-  --normal    Balanced      
-  --fast      Aggressive    
-  --extreme   Datacenter    
+  --normal     Balanced defaults (implicit)
+  --fast       Aggressive scanning, moderate stability
+  --slow       Conservative and stable
+  --extreme    Datacenter-grade, minimal timeouts
 
 INPUT SOURCES
 -------------
-  -f, --file <PATH>             IPs from file.
-  -a, --asn <ASN>               IPs from ASN.
-  -r, --range <CIDR>            IPs from CIDR range.
+  -f,  --file <PATH>             Load IPs from file
+  -a,  --asn <ASN,...>           Scan Cloudflare ASNs
+  -r,  --range <CIDR,...>        Scan CIDR ranges
+
+Multiple inputs can be combined.
 
 EXCLUSION RULES
 ---------------
-  -xf, --exclude-file <PATH>    Exclude IPs from file.
-  -xa, --exclude-asn <ASN>      Exclude ASNs.
-  -xr, --exclude-range <CIDR>   Exclude ranges.
+  -xf, --exclude-file <PATH>     Exclude IPs from file
+  -xa, --exclude-asn <ASN,...>   Exclude ASNs
+  -xr, --exclude-range <CIDR>    Exclude CIDR ranges
 
-PERFORMANCE OVERRIDES
----------------------
-  --tcp-workers <N>             (1-5000)
-  --signature-workers <N>       (1-2000)
-  --v2ray-workers <N>           (1-500)
-  --tcp-buffer <N>              Set TCP queue size manually.
-  --v2ray-buffer <N>            Set V2Ray queue size manually.
+PERFORMANCE (CONCURRENCY)
+-------------------------
+  --tcp-workers <N>              TCP probe workers        (1–5000)
+  --signature-workers <N>        Signature workers        (1–2000)
+  --v2ray-workers <N>            Xray verification workers (1–500)
+  --speed-workers <N>            Speed test workers       (1–50)
 
-TIMEOUTS (MS)
--------------
-  --tcp-timeout, --tls-timeout, --http-timeout, --sign-timeout
-  --xray-start-timeout, --xray-conn-timeout, --xray-kill-timeout
+QUEUE / BUFFER SIZES
+--------------------
+  --tcp-buffer <N>               TCP result queue size
+  --v2ray-buffer <N>             V2Ray result queue size
+  --speed-buffer <N>             Speed test queue size
 
-GENERAL
--------
-  -vc, --v2ray-config <PATH>    Enable Xray verification.
-  --sort                        Sort output by latency.
-  -nl, --no-latency             Don't save latency.
-  -s, --shuffle                 Randomize scan order.
-  -y, --yes                     Skip confirmation & start scan immediately.
+If buffers are not specified, they are auto-scaled
+based on final worker counts.
+
+SPEED TEST CRITERIA
+-------------------
+  --speed-dl <VAL>               Min download speed (e.g. 50kb)
+  --speed-ul <VAL>               Min upload speed   (e.g. 0.5mb)
+
+If neither is specified, speed testing is disabled.
+
+XRAY / V2RAY
+------------
+  -vc, --v2ray-config <PATH>     Enable real Xray verification
+                                 (Requires valid Xray config)
+  --random-sni                   Enable Random SNI for each request
+PORT SELECTION
+--------------
+  -p, --port <PORT>              HTTPS port to scan
+                                 Allowed:
+                                 443, 2053, 2083, 2087, 2096, 8443
+
+TIMEOUTS (MILLISECONDS)
+----------------------
+  --tcp-timeout <MS>             TCP connect timeout
+  --tls-timeout <MS>             TLS handshake timeout
+  --http-timeout <MS>            HTTP read timeout
+  --sign-timeout <MS>            Signature stage timeout
+
+  --xray-start-timeout <MS>      Xray startup timeout
+  --xray-conn-timeout <MS>       Proxy connectivity timeout
+  --xray-kill-timeout <MS>       Process termination timeout
+
+OUTPUT & BEHAVIOR
+-----------------
+  --sort                         Sort results by latency
+  -nl, --no-latency              Do not store latency values
+  -s,  --shuffle                 Randomize IP scan order
+  -y,  --yes                     Skip confirmation prompt
+
+HELP
+----
+  -h, --help                     Show short help
+  -h full | --help full          Show full documentation
+  --manual                       Same as full help
+
+EXAMPLES
+--------
+  Fast scan with speed test:
+    CFScanner --range 104.16.0.0/24 --fast --speed-dl 1mb
+
+  ASN scan with Xray verification:
+    CFScanner --asn 13335 -vc xray.json --slow
+
+  Aggressive datacenter scan:
+    CFScanner --range 172.64.0.0/16 --extreme -y
 ");
     }
 }
