@@ -18,7 +18,7 @@ IPs are actually functional and capable of passing traffic.
 ### Key Features
 
 -   **Multi-Stage Pipeline:**
-    1.  **TCP Stage:** Fast connectivity check on port 443.
+    1.  **TCP Stage:** Fast connectivity check on the selected port (default: 443)
     2.  **Signature Stage:** TLS handshake and HTTP response analysis
         (Cloudflare fingerprinting).
     3.  **Real Proxy Stage (Optional):** Validates the IP by
