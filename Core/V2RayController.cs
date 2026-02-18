@@ -105,6 +105,7 @@ public static class V2RayController
     /// </summary>
     public static async Task TestV2RayConnection(
       string ipAddress,
+      int port,
       long signatureLatency,
       ChannelWriter<ScannerWorkers.SpeedTestRequest>? speedTestWriter,
       CancellationToken ct)
@@ -137,7 +138,7 @@ public static class V2RayController
             // -----------------------------------------------------------------
             // Patch outbound target IP and SNI
             // -----------------------------------------------------------------
-            TryPatchOutboundTarget(rootNode, ipAddress);
+            TryPatchOutboundTarget(rootNode, ipAddress,port);
 
             string finalConfigJson = rootNode.ToJsonString();
 
@@ -163,6 +164,7 @@ public static class V2RayController
                 await speedTestWriter.WriteAsync(
                     new ScannerWorkers.SpeedTestRequest(
                         IPAddress.Parse(ipAddress),
+                        port,
                         totalLatency,
                         xrayProcess,
                         localPort),
@@ -172,9 +174,10 @@ public static class V2RayController
             }
             else
             {
-                FileUtils.SaveResult(ipAddress, totalLatency);
+                FileUtils.SaveResult(ipAddress,port, totalLatency);
                 ConsoleInterface.PrintSuccess(
                     ipAddress,
+                    port,
                     totalLatency,
                     "REAL-XRAY");
             }
@@ -221,6 +224,7 @@ public static class V2RayController
     /// </summary>
     public static async Task RunSpeedTestAsync(
         string ipAddress,
+        int port,
         long pingLatency,
         Process xrayProcess,  // Received from producer
         int localPort,        // Associated port from producer
@@ -240,6 +244,7 @@ public static class V2RayController
                 {
                     ConsoleInterface.PrintSuccess(
                         ipAddress,
+                        port,
                         pingLatency,
                         "REAL-XRAY - Upload Test Failed",
                         ConsoleColor.DarkYellow);
@@ -256,6 +261,7 @@ public static class V2RayController
                 {
                     ConsoleInterface.PrintSuccess(
                         ipAddress,
+                        port,
                         pingLatency,
                         $"REAL-XRAY - Download Test Failed)",
                         ConsoleColor.DarkYellow);
@@ -265,14 +271,14 @@ public static class V2RayController
 
           
             // Both tests passed; save result
-            FileUtils.SaveResult(ipAddress, pingLatency);
+            FileUtils.SaveResult(ipAddress,port, pingLatency);
 
             string extraInfo = "";
             if (dlSpeed > 0) extraInfo += " | Download: Ok";
             if (ulSpeed > 0) extraInfo += " | Upload: Ok";
             GlobalContext.IncrementSpeedTestPassed();
 
-            ConsoleInterface.PrintSuccess(ipAddress, pingLatency, "SPEED-PASS" + extraInfo);
+            ConsoleInterface.PrintSuccess(ipAddress,port, pingLatency, "SPEED-PASS" + extraInfo);
         }
         catch
         {
@@ -550,7 +556,8 @@ public static class V2RayController
 
     private static void TryPatchOutboundTarget(
     JsonNode rootNode,
-    string ipAddress)
+    string ipAddress,
+    int port)
     {
         try
         {
@@ -566,6 +573,13 @@ public static class V2RayController
             if (vnext?["address"] != null)
             {
                 vnext["address"] = ipAddress;
+            }
+            // -------------------------------------------------------------
+            // Replace target port (always)
+            // -------------------------------------------------------------
+            if (vnext?["port"] != null)
+            {
+                vnext["port"] = port;
             }
 
             // -------------------------------------------------------------
@@ -587,7 +601,7 @@ public static class V2RayController
             if (labels.Length < 3)
                 return; // No subdomain → do not touch SNI
 
-            labels[0] = Guid.NewGuid().ToString("N")[..8];
+            labels[0] = Guid.NewGuid().ToString("N");
 
             string newServerName = string.Join('.', labels);
 

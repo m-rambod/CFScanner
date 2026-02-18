@@ -7,7 +7,7 @@ namespace CFScanner.Utils;
 /// </summary>
 public static class FileUtils
 {
-    private static readonly object FileLock = new();
+    private static readonly Lock FileLock = new();
 
     /// <summary>
     /// Creates the output directory and sets the full path of the results file in <see cref="GlobalContext.OutputFilePath"/>.
@@ -20,53 +20,137 @@ public static class FileUtils
     }
 
     /// <summary>
-    /// Appends a successfully verified IP (with optional latency) to the results file, thread‑safe.
+    /// Appends a successfully verified IP and port (optionally with latency)
+    /// to the results file in a thread-safe manner.
     /// </summary>
-    /// <param name="ip">IP address.</param>
-    /// <param name="latency">Latency in milliseconds.</param>
-    public static void SaveResult(string ip, long latency)
+    /// <param name="ip">The verified IP address.</param>
+    /// <param name="port">The verified port number.</param>
+    /// <param name="latency">Measured latency in milliseconds.</param>
+    public static void SaveResult(string ip, int port, long latency)
     {
         lock (FileLock)
         {
-            string line = GlobalContext.Config.SaveLatency ? $"{ip} # {latency}ms" : ip;
+            string line;
+            bool isMultiPort = GlobalContext.Config.Ports.Count > 1;
+
+            if (GlobalContext.Config.SaveLatency)
+            {
+                // Multi-port format includes explicit port and latency
+                if (isMultiPort)
+                {
+                    line = $"{ip} #Port: {port} #Latency: {latency}ms";
+                }
+                // Single-port format preserves legacy compact output
+                else
+                {
+                    line = $"{ip} # {latency}ms";
+                }
+            }
+            else
+            {
+                // Output without latency information
+                if (isMultiPort)
+                {
+                    line = $"{ip}:{port}";
+                }
+                else
+                {
+                    line = ip;
+                }
+            }
+
             File.AppendAllText(GlobalContext.OutputFilePath, line + Environment.NewLine);
         }
     }
 
     /// <summary>
-    /// Sorts the results file by latency (if the corresponding options are enabled).
+    /// Sorts the results file based on configuration:
+    /// - By latency if sorting is enabled.
+    /// - By IP and port only when multiple ports are configured.
+    /// No sorting is performed for single-port scans when sorting is disabled.
     /// </summary>
     public static void SortResultsFile()
     {
-        if (!GlobalContext.Config.SortResults ||
-            !File.Exists(GlobalContext.OutputFilePath))
+        if (!File.Exists(GlobalContext.OutputFilePath))
             return;
 
-        Console.WriteLine("\n[Info] Sorting results by latency...");
+        bool isMultiPort = GlobalContext.Config.Ports.Count > 1;
+
+        // Skip sorting entirely for single-port scans when sorting is disabled
+        if (!GlobalContext.Config.SortResults && !isMultiPort)
+        {
+            return;
+        }
+
+        Console.WriteLine("\n[Info] Sorting results...");
+
         try
         {
-            var lines = File.ReadAllLines(GlobalContext.OutputFilePath);
-            var sortedLines = lines.Select(line =>
+            var lines = File.ReadAllLines(GlobalContext.OutputFilePath)
+                .Where(l => !string.IsNullOrWhiteSpace(l))
+                .ToList();
+
+            List<string> sortedLines;
+
+            if (GlobalContext.Config.SortResults)
             {
-                long lat = long.MaxValue;
-                var parts = line.Split('#');
-                if (parts.Length > 1)
+                // Sort by latency (ascending), supporting both legacy and new formats
+                sortedLines = [.. lines.OrderBy(line =>
+            {
+                long latency = long.MaxValue;
+                string latencyStr = "";
+
+                if (line.Contains("#Latency:"))
+                    latencyStr = line.Split(["#Latency:"], StringSplitOptions.None)[1];
+                else if (line.Contains('#'))
+                    latencyStr = line.Split('#')[1];
+
+                if (!string.IsNullOrEmpty(latencyStr))
                 {
-                    var latencyPart = parts[1].Trim().Replace("ms", "");
-                    long.TryParse(latencyPart, out lat);
+                    latencyStr = latencyStr.Replace("ms", "").Trim();
+                    long.TryParse(latencyStr, out latency);
                 }
-                return new { Line = line, Latency = lat };
+
+                return latency;
+            })];
+            }
+            else
+            {
+                // Sort by IP and port (only applicable in multi-port mode)
+                sortedLines = [.. lines.Select(line =>
+            {
+                string ipStr = line;
+                int port = 0;
+
+                if (line.Contains("#Port:"))
+                {
+                    var parts = line.Split(["#Port:"], StringSplitOptions.None);
+                    ipStr = parts[0].Trim();
+                    var portPart = parts[1].Split('#')[0].Trim();
+                    int.TryParse(portPart, out port);
+                }
+                else if (line.Contains(':'))
+                {
+                    var parts = line.Split(':');
+                    ipStr = parts[0].Trim();
+                    if (parts.Length > 1)
+                        int.TryParse(parts[1], out port);
+                }
+
+                Version.TryParse(ipStr, out Version? v);
+                return new { Line = line, IpVer = v, Port = port };
             })
-            .OrderBy(x => x.Latency)
-            .Select(x => x.Line)
-            .ToList();
+            .OrderBy(x => x.IpVer)
+            .ThenBy(x => x.Port)
+            .Select(x => x.Line)];
+            }
 
             File.WriteAllLines(GlobalContext.OutputFilePath, sortedLines);
             Console.WriteLine("[Info] Sorting completed.");
         }
         catch
         {
-            // Ignore errors during sorting
+            // Errors during sorting are intentionally ignored to avoid interrupting execution
         }
     }
 
@@ -89,7 +173,7 @@ public static class FileUtils
 
                 // Strip trailing comments or whitespace
                 int index = span.IndexOfAny(' ', '\t', '#');
-                if (index >= 0) span = span.Slice(0, index);
+                if (index >= 0) span = span[..index];
 
                 var cleanPart = span.ToString();
                 if (cleanPart.Contains('/'))
