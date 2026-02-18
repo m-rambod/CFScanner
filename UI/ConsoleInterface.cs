@@ -32,9 +32,6 @@ public static class ConsoleInterface
     // Basic Output Helpers
     // ---------------------------------------------------------------------
 
-    /// <summary>
-    /// Clears the console and prints the application banner/header.
-    /// </summary>
     public static void PrintHeader()
     {
         Console.Clear();
@@ -42,10 +39,6 @@ public static class ConsoleInterface
         Console.WriteLine(new string('-', 60));
     }
 
-    /// <summary>
-    /// Prints an error message in red.
-    /// Intended for recoverable and fatal user-facing errors.
-    /// </summary>
     public static void PrintError(string msg)
     {
         Console.ForegroundColor = ConsoleColor.Red;
@@ -53,25 +46,6 @@ public static class ConsoleInterface
         Console.ResetColor();
     }
 
-    /// <summary>
-    /// Prints a warning message in yellow.
-    /// Optionally asks the user for confirmation.
-    /// If confirmation is required, only 'Y' or 'y' returns true.
-    /// Any other key returns false.
-    /// </summary>
-    /// <param name="msg">
-    /// Warning message to display.
-    /// </param>
-    /// <param name="requireConfirmation">
-    /// If true, prompts the user to confirm by pressing 'Y'.
-    /// </param>
-    /// <param name="prependNewLine">
-    /// If true, prints an empty line before the warning message.
-    /// Useful for visual separation from previous output.
-    /// </param>
-    /// <returns>
-    /// True if execution should continue; otherwise false.
-    /// </returns>
     public static bool PrintWarning(
         string msg,
         bool requireConfirmation = false,
@@ -84,7 +58,7 @@ public static class ConsoleInterface
         Console.WriteLine($"[Warning] {msg}");
         Console.ResetColor();
 
-        if (!requireConfirmation || Console.IsInputRedirected)
+        if (!requireConfirmation || Console.IsOutputRedirected)
             return true;
 
         Console.ForegroundColor = ConsoleColor.DarkCyan;
@@ -109,14 +83,12 @@ public static class ConsoleInterface
     {
         lock (ConsoleLock)
         {
-            // Temporarily clear the status line so output appears clean
             if (_statusLineVisible && !Console.IsOutputRedirected)
                 ClearStatusLineInternal();
 
             Console.ForegroundColor = color;
             Console.Write($"[{type}] {ip} : {port} - Latency: ");
 
-            // Color-code latency for quick visual feedback
             if (latency < 800)
                 Console.ForegroundColor = ConsoleColor.Cyan;
             else if (latency < 1500)
@@ -127,7 +99,6 @@ public static class ConsoleInterface
             Console.WriteLine($"{latency}ms");
             Console.ResetColor();
 
-            // Restore the status line at the new cursor position
             if (_statusLineVisible && !Console.IsOutputRedirected)
             {
                 _statusLineRow = Console.CursorTop;
@@ -140,11 +111,6 @@ public static class ConsoleInterface
     // Final Report
     // ---------------------------------------------------------------------
 
-    /// <summary>
-    /// Prints the final scan statistics and output file information.
-    /// Automatically hides the live status line before printing.
-    /// </summary>
-    /// <param name="totalTime">Total scan duration.</param>
     public static void PrintFinalReport(TimeSpan totalTime)
     {
         HideStatusLine();
@@ -160,7 +126,6 @@ public static class ConsoleInterface
             Console.WriteLine($" Speed Verified   : {GlobalContext.SpeedTestPassed:N0}");
         Console.WriteLine($" Duration         : {totalTime:hh\\:mm\\:ss}");
 
-        // Output file handling
         if (File.Exists(GlobalContext.OutputFilePath))
         {
             var lines = File.ReadAllLines(GlobalContext.OutputFilePath);
@@ -171,7 +136,6 @@ public static class ConsoleInterface
             }
             else
             {
-                // Cleanup empty result file
                 try { File.Delete(GlobalContext.OutputFilePath); } catch { }
                 Console.WriteLine(" Output File      : No results saved (empty file deleted).");
             }
@@ -189,48 +153,48 @@ public static class ConsoleInterface
     // Live Status Line Monitor
     // ---------------------------------------------------------------------
 
-    /// <summary>
-    /// Periodically updates a single-line live status display showing
-    /// progress, speed, counters, and channel buffer usage.
-    /// </summary>
-    /// <param name="tcpReader">
-    /// Reader for the TCP channel (used to estimate buffer pressure).
-    /// </param>
-    /// <param name="v2rayReader">
-    /// Optional reader for the V2Ray channel.
-    /// </param>
-    /// <param name="token">
-    /// Cancellation token used to stop the monitor gracefully.
-    /// </param>
     public static async Task MonitorUi(
-         ChannelReader<ScannerWorkers.LiveConnection> tcpReader,
-         ChannelReader<ScannerWorkers.SignatureResult>? v2rayReader,
-         ChannelReader<ScannerWorkers.SpeedTestRequest>? speedTestReader,
-         CancellationToken token)
+      ChannelReader<ScannerWorkers.LiveConnection> tcpReader,
+      ChannelReader<ScannerWorkers.SignatureResult>? v2rayReader,
+      ChannelReader<ScannerWorkers.SpeedTestRequest>? speedTestReader,
+      CancellationToken token)
     {
+        Task? keyListenerTask = null;
+
+        // تسک جداگانه برای ورودی (رفع لگ کلید P)
+        if (!Console.IsInputRedirected)
+        {
+            keyListenerTask = Task.Run(async () =>
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    if (Console.KeyAvailable)
+                    {
+                        var key = Console.ReadKey(true);
+                        if (key.Key == ConsoleKey.P)
+                        {
+                            PauseManager.Toggle();
+
+                            lock (ConsoleLock)
+                            {
+                                if (_statusLineVisible && !Console.IsOutputRedirected)
+                                    RenderStatusLineInternal();
+                            }
+                        }
+                    }
+
+                    await Task.Delay(50, token); // چک ورودی هر 50ms
+                }
+            }, token);
+        }
+
         try
         {
             while (!token.IsCancellationRequested)
             {
-                // ---------------------------------------------------------
-                // Avoid flicker before any activity
-                // ---------------------------------------------------------
-                if (GlobalContext.ScannedCount == 0 &&
-                    GlobalContext.TcpOpenTotal == 0)
-                {
-                    await Task.Delay(200, token);
-                    continue;
-                }
+                double elapsedSeconds = GlobalContext.Stopwatch.Elapsed.TotalSeconds;
+                double scanSpeed = GlobalContext.ScannedCount / Math.Max(elapsedSeconds, 1);
 
-                double elapsedSeconds =
-                    GlobalContext.Stopwatch.Elapsed.TotalSeconds;
-
-                double scanSpeed =
-                    GlobalContext.ScannedCount / Math.Max(elapsedSeconds, 1);
-
-                // ---------------------------------------------------------
-                // Progress
-                // ---------------------------------------------------------
                 string progressStr;
                 if (GlobalContext.IsInfiniteMode)
                 {
@@ -238,45 +202,27 @@ public static class ConsoleInterface
                 }
                 else
                 {
-                    double percent =
-                        GlobalContext.ScannedCount * 100.0 /
-                        Math.Max(GlobalContext.TotalIps, 1);
-
-                    progressStr =
-                        $"{percent:F2}% " +
-                        $"({GlobalContext.ScannedCount:N0}/{GlobalContext.TotalIps:N0})";
+                    double percent = GlobalContext.ScannedCount * 100.0 / Math.Max(GlobalContext.TotalIps, 1);
+                    progressStr = $"{percent:F2}% ({GlobalContext.ScannedCount:N0}/{GlobalContext.TotalIps:N0})";
                 }
 
-                // ---------------------------------------------------------
-                // Channel buffer usage (Backpressure visibility)
-                // ---------------------------------------------------------
-                int tcpBuf =
-                    (int)(tcpReader.Count * 100.0 /
-                          Math.Max(GlobalContext.Config.TcpChannelBuffer, 1));
-
+                int tcpBuf = (int)(tcpReader.Count * 100.0 / Math.Max(GlobalContext.Config.TcpChannelBuffer, 1));
                 int v2Buf = 0;
-                if (GlobalContext.Config.EnableV2RayCheck &&
-                    v2rayReader != null)
-                {
-                    v2Buf =
-                        (int)(v2rayReader.Count * 100.0 /
-                              Math.Max(GlobalContext.Config.V2RayChannelBuffer, 1));
-                }
-
+                if (GlobalContext.Config.EnableV2RayCheck && v2rayReader != null)
+                    v2Buf = (int)(v2rayReader.Count * 100.0 / Math.Max(GlobalContext.Config.V2RayChannelBuffer, 1));
                 int spdBuf = 0;
-               
-
                 if (GlobalContext.Config.EnableSpeedTest && speedTestReader != null)
-                {
-                    spdBuf =
-                        (int)(speedTestReader.Count * 100.0 /
-                              Math.Max(GlobalContext.Config.SpeedTestBuffer, 1));
-                }
+                    spdBuf = (int)(speedTestReader.Count * 100.0 / Math.Max(GlobalContext.Config.SpeedTestBuffer, 1));
 
-                // ---------------------------------------------------------
-                // Build status line
-                // ---------------------------------------------------------
+                bool hasActivity = GlobalContext.ScannedCount > 0 || GlobalContext.TcpOpenTotal > 0;
+
                 var sb = new StringBuilder(256);
+
+                if (PauseManager.IsPaused)
+                    sb.Append("[PAUSED - Press P to resume] ");
+
+                if (!hasActivity)
+                    sb.Append("[Idle - waiting for first workers] ");
 
                 sb.Append($"[Time {TimeSpan.FromSeconds(elapsedSeconds):hh\\:mm\\:ss}] ");
                 sb.Append($"[Prog {progressStr}] ");
@@ -292,40 +238,40 @@ public static class ConsoleInterface
 
                 sb.Append("[Buf ");
                 sb.Append($"TCP {tcpBuf}%");
-
-                if (GlobalContext.Config.EnableV2RayCheck)
-                    sb.Append($" | V2R {v2Buf}%");
-
-                if (GlobalContext.Config.EnableSpeedTest)
-                    sb.Append($" | SPD {spdBuf}%");
-
+                if (GlobalContext.Config.EnableV2RayCheck) sb.Append($" | V2R {v2Buf}%");
+                if (GlobalContext.Config.EnableSpeedTest) sb.Append($" | SPD {spdBuf}%");
                 sb.Append(']');
 
-                // ---------------------------------------------------------
-                // Render
-                // ---------------------------------------------------------
+                string newStatusLine = sb.ToString();
+
                 lock (ConsoleLock)
                 {
-                    _lastStatusLine = sb.ToString();
+                    _lastStatusLine = newStatusLine;
                     EnsureStatusLine();
                     RenderStatusLine();
                 }
 
-                await Task.Delay(500, token);
+                await Task.Delay(hasActivity ? 500 : 200, token);
             }
         }
         catch (TaskCanceledException)
         {
-            // Expected during shutdown
+            // ignore
+        }
+        finally
+        {
+            if (keyListenerTask is not null)
+            {
+                try { await keyListenerTask; }
+                catch (TaskCanceledException) { }
+            }
         }
     }
+
     // ---------------------------------------------------------------------
     // Status Line Control Helpers
     // ---------------------------------------------------------------------
 
-    /// <summary>
-    /// Ensures the status line is marked visible and records its console row.
-    /// </summary>
     public static void EnsureStatusLine()
     {
         if (Console.IsOutputRedirected) return;
@@ -340,9 +286,6 @@ public static class ConsoleInterface
         }
     }
 
-    /// <summary>
-    /// Clears and hides the status line.
-    /// </summary>
     public static void HideStatusLine()
     {
         if (Console.IsOutputRedirected || !_statusLineVisible)
@@ -355,9 +298,6 @@ public static class ConsoleInterface
         }
     }
 
-    /// <summary>
-    /// Forces a redraw of the status line using the latest content.
-    /// </summary>
     public static void RenderStatusLine()
     {
         if (Console.IsOutputRedirected || !_statusLineVisible)
@@ -373,10 +313,6 @@ public static class ConsoleInterface
     // Low-level Console Cursor Operations (Internal)
     // ---------------------------------------------------------------------
 
-    /// <summary>
-    /// Renders the status line at its fixed row without altering
-    /// the user's current cursor position.
-    /// </summary>
     private static void RenderStatusLineInternal()
     {
         if (_statusLineRow < 0) return;
@@ -386,18 +322,17 @@ public static class ConsoleInterface
         int saveTop = Console.CursorTop;
 
         Console.SetCursorPosition(0, _statusLineRow);
+        Console.ForegroundColor = PauseManager.IsPaused ? ConsoleColor.Red : ConsoleColor.White;
 
         string line = _lastStatusLine.Length > width
-            ? _lastStatusLine[..width]
-            : _lastStatusLine.PadRight(width);
+                ? _lastStatusLine[..width]
+                : _lastStatusLine.PadRight(width);
 
         Console.Write(line);
         Console.SetCursorPosition(saveLeft, saveTop);
+        Console.ResetColor();
     }
 
-    /// <summary>
-    /// Clears the status line row by overwriting it with spaces.
-    /// </summary>
     private static void ClearStatusLineInternal()
     {
         if (_statusLineRow < 0) return;

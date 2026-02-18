@@ -33,6 +33,7 @@ public static class ScanEngine
         if (speedTestEnabled)
             Console.WriteLine("[Mode] Speed Test ENABLED");
 
+        Console.WriteLine("[Info] Press P to pause/resume");
         Console.WriteLine(new string('-', 60));
         GlobalContext.Stopwatch.Start();
 
@@ -50,7 +51,7 @@ public static class ScanEngine
             });
 
         // Stage 2 → Stage 3: Signature validation results
-        Channel<ScannerWorkers.SignatureResult>? v2rayChannel = v2rayEnabled
+        var v2rayChannel = v2rayEnabled
             ? Channel.CreateBounded<ScannerWorkers.SignatureResult>(
                 new BoundedChannelOptions(GlobalContext.Config.V2RayChannelBuffer)
                 {
@@ -61,7 +62,7 @@ public static class ScanEngine
             : null;
 
         // Stage 3 → Stage 4: Verified endpoints for speed testing
-        Channel<ScannerWorkers.SpeedTestRequest>? speedTestChannel = speedTestEnabled
+        var speedTestChannel = speedTestEnabled
             ? Channel.CreateBounded<ScannerWorkers.SpeedTestRequest>(
                 new BoundedChannelOptions(GlobalContext.Config.SpeedTestBuffer)
                 {
@@ -150,12 +151,16 @@ public static class ScanEngine
                     MaxDegreeOfParallelism = GlobalContext.Config.TcpWorkers,
                     CancellationToken = GlobalContext.Cts.Token
                 },
-                async (item, ct) =>
+                async (ip, ct) =>
+                {
+                    await PauseManager.WaitIfPausedAsync(ct);
+
                     await ScannerWorkers.ProducerWorker(
                         item.ip,
                         item.port,
                         tcpChannel.Writer,
-                        ct));
+                        ct);
+                });
         }
         catch (OperationCanceledException)
         {

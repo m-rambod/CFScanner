@@ -442,7 +442,7 @@ OPTIONS:
   --manual       Show full documentation
 
 EXAMPLE:
-  CFScanner --range 104.16.0.0/24 --fast --speed-dl 2mb
+  CFScanner --range 104.16.0.0/24 --fast --speed-dl 500kb
 ");
     }
 
@@ -477,17 +477,21 @@ PROFILES (PRESETS)
 
 INPUT SOURCES
 -------------
-  -f,  --file <PATH>             Load IPs from file
-  -a,  --asn <ASN,...>           Scan Cloudflare ASNs
-  -r,  --range <CIDR,...>        Scan CIDR ranges
+  -f,  --file <PATH,...>         Load IP/CIDR file(s);
+                                 (one entry per line, '#' comments ignored)
+  -a,  --asn <ASN,...>           Scan by ASN
+                                 (number or name, comma-separated)
+  -r,  --range <CIDR,...>        Scan CIDRs (comma-separated)
 
 Multiple inputs can be combined.
 
 EXCLUSION RULES
 ---------------
-  -xf, --exclude-file <PATH>     Exclude IPs from file
-  -xa, --exclude-asn <ASN,...>   Exclude ASNs
-  -xr, --exclude-range <CIDR>    Exclude CIDR ranges
+  -xf, --exclude-file <PATH,...>   Exclude IPs or CIDRs from file(s) 
+                                   (one entry per line, '#' comments ignored)
+  -xa, --exclude-asn <ASN,...>     Exclude ASNs
+                                   (number or name via iptoasn, comma-separated)
+  -xr, --exclude-range <CIDR,...>  Exclude CIDR ranges (comma-separated)
 
 PERFORMANCE (CONCURRENCY)
 -------------------------
@@ -511,12 +515,14 @@ SPEED TEST CRITERIA
   --speed-ul <VAL>               Min upload speed   (e.g. 0.5mb)
 
 If neither is specified, speed testing is disabled.
+NOTE: High concurrency may stress the network interface and cause false negatives.
+      Keep speed thresholds low.
 
 XRAY / V2RAY
 ------------
   -vc, --v2ray-config <PATH>     Enable real Xray verification
                                  (Requires valid Xray config)
-  --random-sni                   Enable Random SNI for each request
+  --random-sni                   Enable per-request random SNI (random subdomain)
 
 PORT SELECTION
 --------------
@@ -541,15 +547,15 @@ TIMEOUTS (MILLISECONDS)
 OUTPUT & BEHAVIOR
 -----------------
   --sort                         Sort results by latency
-  -nl, --no-latency              Do not store latency values
+  -nl, --no-latency              Do not store latency values in result file
   -s,  --shuffle                 Randomize IP scan order
-  -y,  --yes                     Skip confirmation prompt
+  -y,  --yes                     Skip configuration summary and start scanning immediately
 
 HELP
 ----
   -h, --help                     Show short help
   -h full | --help full          Show full documentation
-  --manual                       Same as full help
+  --manual                       Same as  -h full
 
 EXAMPLES
 --------

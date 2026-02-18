@@ -73,6 +73,8 @@ public static class ScannerWorkers
         if (ct.IsCancellationRequested)
             return;
 
+        await PauseManager.WaitIfPausedAsync(ct);
+
         var client = new TcpClient();
         bool handedOver = false;
 
@@ -124,6 +126,7 @@ public static class ScannerWorkers
         {
             while (await reader.WaitToReadAsync(ct))
             {
+
                 while (reader.TryRead(out var item))
                 {
                     if (ct.IsCancellationRequested)
@@ -131,6 +134,7 @@ public static class ScannerWorkers
                         item.Client.Dispose();
                         continue;
                     }
+                    await PauseManager.WaitIfPausedAsync(ct);
 
                     bool success = false;
                     long latency = -1;
@@ -208,10 +212,12 @@ public static class ScannerWorkers
         {
             while (await reader.WaitToReadAsync(ct))
             {
+
                 while (reader.TryRead(out var item))
                 {
                     if (ct.IsCancellationRequested)
                         break;
+                    await PauseManager.WaitIfPausedAsync(ct);
 
                     await V2RayController.TestV2RayConnection(
                         item.Ip.ToString(),
@@ -241,10 +247,13 @@ public static class ScannerWorkers
         {
             while (await reader.WaitToReadAsync(ct))
             {
+               
+
                 while (reader.TryRead(out var item))
                 {
                     if (ct.IsCancellationRequested)
                         break;
+                    await PauseManager.WaitIfPausedAsync(ct);
 
                     await V2RayController.RunSpeedTestAsync(
                         item.Ip.ToString(),
