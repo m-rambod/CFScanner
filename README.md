@@ -18,7 +18,7 @@ IPs are actually functional and capable of passing traffic.
 ### Key Features
 
 -   **Multi-Stage Pipeline:**
-    1.  **TCP Stage:** Fast connectivity check on the selected port (default: 443)
+    1.  **TCP Stage:** Fast connectivity check on the selected port(s) (default: 443)
     2.  **Signature Stage:** TLS handshake and HTTP response analysis
         (Cloudflare fingerprinting).
     3.  **Real Proxy Stage (Optional):** Validates the IP by
@@ -119,21 +119,28 @@ You must provide a valid working JSON configuration file.
 
 > ⚠️ **Important Notes**
 >
-> - Your V2Ray/Xray config may use **any HTTPS port supported by Cloudflare**
->   (e.g. `443`, `2053`, `2083`, `2087`, `2096`, `8443`).
+> - The port value defined inside the V2Ray/Xray JSON configuration file
+>   is **not used as a source of truth** by the scanner.
 >
-> - If the port is **not explicitly specified** via `-p` or `--port`,
->   the scanner defaults to **port 443** for the **TCP and Signature stages**.
->   The **Real Xray verification stage**, however, always uses the port
->   defined inside the V2Ray/Xray configuration.
+> - All **TCP**, **Signature**, and **Real Xray verification stages**
+>   operate strictly on the port or ports explicitly provided via the
+>   `-p` / `--port` command-line switch.
 >
-> - This port mismatch **may still produce successful results**,
->   but it leads to an **inconsistent verification pipeline**
->   where early-stage checks and real proxy validation are performed
->   against different ports.
+> - When multiple ports are specified, the scanner performs a complete
+>   verification pipeline **independently for each port**.
 >
-> - For correct and deterministic results, always specify the same port
->   in both the V2Ray/Xray config and the scanner (`-p` / `--port`).
+> - When scanning multiple ports with **V2Ray/Xray verification enabled**,
+>   the server **must expose a dedicated inbound listener for each scanned port**.
+>
+> - All corresponding V2Ray/Xray inbounds **must share the same UUID** and
+>   **must use identical `path` and `SNI` values** to ensure deterministic behavior.
+>
+> - If a **wildcard TLS certificate** is used, the **left-most label of the SNI
+>   may vary**, while the remaining domain must remain identical.
+>
+> - For reliable and reproducible results, always ensure that the ports
+>   specified via `-p` / `--port` **exactly match the ports configured on
+>   the server side**.
 >
 > - You only need to provide the **`outbounds` section** of your config.
 >   Other sections such as `inbounds`, `routing`, or `dns`
@@ -303,7 +310,7 @@ cfscanner --asn cloudflare --v2ray-config config.json
 | `--help full`              | Display the full help message with detailed descriptions.                  |
 | `-y, --yes, --no-confirm`  | Skip confirmation prompt and start scanning immediately.                   |
 | `--random-sni`             | Randomizes the first SNI label when serverName is a subdomain (wildcard TLS certificate required). |
-| `-p, --port`               | Target port to scan (must match the port defined in the JSON config). |
+| `-p, --port <LIST>`        | Target ports to scan.                      |
 
 ------------------------------------------------------------------------
 
