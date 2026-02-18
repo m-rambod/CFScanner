@@ -174,7 +174,7 @@ public static class V2RayController
             }
             else
             {
-                FileUtils.SaveResult(ipAddress, totalLatency);
+                FileUtils.SaveResult(ipAddress,port, totalLatency);
                 ConsoleInterface.PrintSuccess(
                     ipAddress,
                     port,
@@ -271,7 +271,7 @@ public static class V2RayController
 
           
             // Both tests passed; save result
-            FileUtils.SaveResult(ipAddress, pingLatency);
+            FileUtils.SaveResult(ipAddress,port, pingLatency);
 
             string extraInfo = "";
             if (dlSpeed > 0) extraInfo += " | Download: Ok";

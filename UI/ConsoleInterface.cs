@@ -1,4 +1,5 @@
 ﻿using CFScanner.Core;
+using CFScanner.Utils; // For Accessing Config
 using System.Text;
 using System.Threading.Channels;
 
@@ -77,9 +78,10 @@ public static class ConsoleInterface
     /// to prevent console corruption.
     /// </summary>
     /// <param name="ip">The verified IP address.</param>
+    /// <param name="port">The verified Port.</param>
     /// <param name="latency">Measured latency in milliseconds.</param>
     /// <param name="type">Stage identifier (e.g. SIGNATURE, REAL-XRAY).</param>
-    public static void PrintSuccess(string ip,int port, long latency, string type, ConsoleColor color = ConsoleColor.Green)
+    public static void PrintSuccess(string ip, int port, long latency, string type, ConsoleColor color = ConsoleColor.Green)
     {
         lock (ConsoleLock)
         {
@@ -115,15 +117,25 @@ public static class ConsoleInterface
     {
         HideStatusLine();
 
+        int portsCount = Math.Max(1, GlobalContext.Config.Ports.Count);
+        long totalProbes = GlobalContext.TotalIps * portsCount;
+
         Console.ForegroundColor = ConsoleColor.Cyan;
         Console.WriteLine("\n══════════════════════════════════");
-        Console.WriteLine($" Total IPs        : {(GlobalContext.IsInfiniteMode ? "Infinite" : GlobalContext.TotalIps.ToString("N0"))}");
-        Console.WriteLine($" Scanned          : {GlobalContext.ScannedCount:N0}");
+        Console.WriteLine($" Unique IPs       : {(GlobalContext.IsInfiniteMode ? "Infinite" : GlobalContext.TotalIps.ToString("N0"))}");
+        Console.WriteLine($" Ports per IP     : {portsCount}");
+        if (!GlobalContext.IsInfiniteMode)
+            Console.WriteLine($" Total Checks     : {totalProbes:N0}");
+
+        Console.WriteLine($" Scanned (Probes) : {GlobalContext.ScannedCount:N0}");
         Console.WriteLine($" Signature Passed : {GlobalContext.SignaturePassed:N0}");
+
         if (GlobalContext.Config.EnableV2RayCheck)
             Console.WriteLine($" V2Ray Verified   : {GlobalContext.V2RayPassed:N0}");
+
         if (GlobalContext.Config.EnableSpeedTest)
             Console.WriteLine($" Speed Verified   : {GlobalContext.SpeedTestPassed:N0}");
+
         Console.WriteLine($" Duration         : {totalTime:hh\\:mm\\:ss}");
 
         if (File.Exists(GlobalContext.OutputFilePath))
@@ -161,7 +173,7 @@ public static class ConsoleInterface
     {
         Task? keyListenerTask = null;
 
-        // تسک جداگانه برای ورودی (رفع لگ کلید P)
+        // Task for reading keys (fixes P key lag)
         if (!Console.IsInputRedirected)
         {
             keyListenerTask = Task.Run(async () =>
@@ -183,16 +195,23 @@ public static class ConsoleInterface
                         }
                     }
 
-                    await Task.Delay(50, token); // چک ورودی هر 50ms
+                    await Task.Delay(50, token); // Check input every 50ms
                 }
             }, token);
         }
 
         try
         {
+            // Calculate total expected probes (IPs * Ports)
+            int portsCount = Math.Max(1, GlobalContext.Config.Ports.Count);
+            string speedUnit = portsCount > 1 ? "chk/s" : "ip/s";
+            long totalProbes = GlobalContext.IsInfiniteMode ? 0 : GlobalContext.TotalIps * portsCount;
+
             while (!token.IsCancellationRequested)
             {
                 double elapsedSeconds = GlobalContext.Stopwatch.Elapsed.TotalSeconds;
+
+                // Speed is now "Probes per second" (chk/s)
                 double scanSpeed = GlobalContext.ScannedCount / Math.Max(elapsedSeconds, 1);
 
                 string progressStr;
@@ -202,8 +221,9 @@ public static class ConsoleInterface
                 }
                 else
                 {
-                    double percent = GlobalContext.ScannedCount * 100.0 / Math.Max(GlobalContext.TotalIps, 1);
-                    progressStr = $"{percent:F2}% ({GlobalContext.ScannedCount:N0}/{GlobalContext.TotalIps:N0})";
+                    // Percentage based on Total Probes (IPs * Ports)
+                    double percent = GlobalContext.ScannedCount * 100.0 / Math.Max(totalProbes, 1);
+                    progressStr = $"{percent:F2}% ({GlobalContext.ScannedCount:N0}/{totalProbes:N0})";
                 }
 
                 int tcpBuf = (int)(tcpReader.Count * 100.0 / Math.Max(GlobalContext.Config.TcpChannelBuffer, 1));
@@ -226,7 +246,10 @@ public static class ConsoleInterface
 
                 sb.Append($"[Time {TimeSpan.FromSeconds(elapsedSeconds):hh\\:mm\\:ss}] ");
                 sb.Append($"[Prog {progressStr}] ");
-                sb.Append($"[Speed {scanSpeed:F0} ip/s] ");
+
+                
+                sb.Append($"[Speed {scanSpeed:F0} {speedUnit}] ");
+
                 sb.Append($"[Open {GlobalContext.TcpOpenTotal:N0}] ");
                 sb.Append($"[Sign {GlobalContext.SignaturePassed:N0}] ");
 

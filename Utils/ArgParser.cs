@@ -170,10 +170,10 @@ public static class ArgParser
         if (string.IsNullOrWhiteSpace(value))
             ErrorAndExit($"Missing value for option: {option}");
 
-        value = value.Trim().ToLowerInvariant();
+        value = value!.Trim().ToLowerInvariant();
 
         if (value == "all")
-            return AllowedPorts.OrderBy(p => p).ToList();
+            return [.. AllowedPorts.OrderBy(p => p)];
 
         var parts = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (parts.Length == 0)
@@ -192,7 +192,7 @@ public static class ArgParser
             ports.Add(port);
         }
 
-        return ports.Distinct().OrderBy(p => p).ToList();
+        return [.. ports.Distinct().OrderBy(p => p)];
     }
 
     private static void ApplyProfileDefaults(ScanProfile profile)

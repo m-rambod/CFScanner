@@ -183,7 +183,7 @@ public static class ScannerWorkers
                         }
                         else
                         {
-                            FileUtils.SaveResult(item.Ip.ToString(), latency);
+                            FileUtils.SaveResult(item.Ip.ToString(),item.Port, latency);
                             ConsoleInterface.PrintSuccess(item.Ip.ToString(),item.Port, latency, "SIGNATURE");
                         }
                     }

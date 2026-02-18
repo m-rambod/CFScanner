@@ -151,7 +151,8 @@ public static class ScanEngine
                     MaxDegreeOfParallelism = GlobalContext.Config.TcpWorkers,
                     CancellationToken = GlobalContext.Cts.Token
                 },
-                async (ip, ct) =>
+
+            async (item, ct) =>
                 {
                     await PauseManager.WaitIfPausedAsync(ct);
 
