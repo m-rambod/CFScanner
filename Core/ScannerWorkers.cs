@@ -35,12 +35,12 @@ public static class ScannerWorkers
     /// Represents an IP address with an already established TCP connection.
     /// Ownership of the TcpClient is transferred between pipeline stages.
     /// </summary>
-    public record LiveConnection(IPAddress Ip, TcpClient Client);
+    public record LiveConnection(IPAddress Ip, int Port, TcpClient Client);
 
     /// <summary>
     /// Represents an IP that passed TLS + HTTP signature detection.
     /// </summary>
-    public record SignatureResult(IPAddress Ip, long SignatureLatency);
+    public record SignatureResult(IPAddress Ip, int Port, long SignatureLatency);
 
     /// <summary>
     /// Represents an IP whose Xray process has already passed
@@ -50,6 +50,7 @@ public static class ScannerWorkers
     /// </summary>
     public record SpeedTestRequest(
         IPAddress Ip,
+        int Port,
         long PingLatency,
         Process XrayProcess,
         int LocalPort
@@ -64,9 +65,10 @@ public static class ScannerWorkers
     /// On success, the live socket is forwarded to the signature stage.
     /// </summary>
     public static async Task ProducerWorker(
-        IPAddress ip,
-        ChannelWriter<LiveConnection> writer,
-        CancellationToken ct)
+      IPAddress ip,
+      int port,
+      ChannelWriter<LiveConnection> writer,
+      CancellationToken ct)
     {
         if (ct.IsCancellationRequested)
             return;
@@ -82,12 +84,12 @@ public static class ScannerWorkers
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(GlobalContext.Config.TcpTimeoutMs);
 
-            await client.ConnectAsync(ip, GlobalContext.Config.Port, cts.Token);
+            await client.ConnectAsync(ip, port, cts.Token);
 
             if (client.Connected)
             {
                 GlobalContext.IncrementTcpOpenTotal();
-                await writer.WriteAsync(new LiveConnection(ip, client), ct);
+                await writer.WriteAsync(new LiveConnection(ip, port, client), ct);
                 handedOver = true;
             }
         }
@@ -157,7 +159,7 @@ public static class ScannerWorkers
                             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                             cts.CancelAfter(GlobalContext.Config.TcpTimeoutMs);
 
-                            await retryClient.ConnectAsync(item.Ip, GlobalContext.Config.Port, cts.Token);
+                            await retryClient.ConnectAsync(item.Ip, item.Port, cts.Token);
 
                             if (retryClient.Connected)
                                 (success, latency) = await CheckSignatureLogic(retryClient, ct);
@@ -172,13 +174,13 @@ public static class ScannerWorkers
                         if (GlobalContext.Config.EnableV2RayCheck && v2rayWriter != null)
                         {
                             await v2rayWriter.WriteAsync(
-                                new SignatureResult(item.Ip, latency),
+                                new SignatureResult(item.Ip, item.Port, latency),
                                 ct);
                         }
                         else
                         {
                             FileUtils.SaveResult(item.Ip.ToString(), latency);
-                            ConsoleInterface.PrintSuccess(item.Ip.ToString(), latency, "SIGNATURE");
+                            ConsoleInterface.PrintSuccess(item.Ip.ToString(),item.Port, latency, "SIGNATURE");
                         }
                     }
 
@@ -213,6 +215,7 @@ public static class ScannerWorkers
 
                     await V2RayController.TestV2RayConnection(
                         item.Ip.ToString(),
+                        item.Port,
                         item.SignatureLatency,
                         speedTestWriter,
                         ct);
@@ -245,6 +248,7 @@ public static class ScannerWorkers
 
                     await V2RayController.RunSpeedTestAsync(
                         item.Ip.ToString(),
+                        item.Port,
                         item.PingLatency,
                         item.XrayProcess,
                         item.LocalPort,
@@ -353,5 +357,5 @@ public static class ScannerWorkers
         return true;
     }
 
-    
+
 }

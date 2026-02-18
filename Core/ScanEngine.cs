@@ -138,16 +138,22 @@ public static class ScanEngine
         // ---------------------------------------------------------------------
         try
         {
+            var ipPortSource =
+                from ip in ipSource
+                from port in GlobalContext.Config.Ports
+                select (ip, port);
+
             await Parallel.ForEachAsync(
-                ipSource,
+                ipPortSource,
                 new ParallelOptions
                 {
                     MaxDegreeOfParallelism = GlobalContext.Config.TcpWorkers,
                     CancellationToken = GlobalContext.Cts.Token
                 },
-                async (ip, ct) =>
+                async (item, ct) =>
                     await ScannerWorkers.ProducerWorker(
-                        ip,
+                        item.ip,
+                        item.port,
                         tcpChannel.Writer,
                         ct));
         }

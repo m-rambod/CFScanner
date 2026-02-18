@@ -105,7 +105,7 @@ public static class ConsoleInterface
     /// <param name="ip">The verified IP address.</param>
     /// <param name="latency">Measured latency in milliseconds.</param>
     /// <param name="type">Stage identifier (e.g. SIGNATURE, REAL-XRAY).</param>
-    public static void PrintSuccess(string ip, long latency, string type, ConsoleColor color = ConsoleColor.Green)
+    public static void PrintSuccess(string ip,int port, long latency, string type, ConsoleColor color = ConsoleColor.Green)
     {
         lock (ConsoleLock)
         {
@@ -114,7 +114,7 @@ public static class ConsoleInterface
                 ClearStatusLineInternal();
 
             Console.ForegroundColor = color;
-            Console.Write($"[{type}] {ip} - Latency: ");
+            Console.Write($"[{type}] {ip} : {port} - Latency: ");
 
             // Color-code latency for quick visual feedback
             if (latency < 800)

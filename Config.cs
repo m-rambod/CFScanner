@@ -113,7 +113,7 @@ public class Config
 
     public string AsnDbPath { get; set; } = Defaults.AsnDbPath;
     public string BaseSni { get; set; } = Defaults.BaseSni;
-    public int Port { get; set; } = Defaults.Port;
+    public List<int> Ports { get; set; } = [Defaults.Port];
 
     public bool Shuffle { get; set; } = Defaults.Shuffle;
     public bool SortResults { get; set; } = Defaults.SortResults;

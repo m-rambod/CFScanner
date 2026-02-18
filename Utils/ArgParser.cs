@@ -9,7 +9,6 @@ namespace CFScanner.Utils;
 /// </summary>
 public static class ArgParser
 {
-
     /// <summary>
     /// Parses arguments, applies configuration, and validates inputs.
     /// </summary>
@@ -63,6 +62,7 @@ public static class ArgParser
                     tcpBufferExplicitlySet = true;
                     i++;
                     break;
+
                 case "--v2ray-buffer":
                     GlobalContext.Config.V2RayChannelBuffer = ParseInt(value, option, 1, 10000);
                     v2rayBufferExplicitlySet = true;
@@ -82,12 +82,12 @@ public static class ArgParser
                     GlobalContext.Config.SpeedTestWorkers = ParseInt(value, option, 1, 50);
                     i++;
                     break;
+
                 case "--speed-buffer":
                     GlobalContext.Config.SpeedTestBuffer = ParseInt(value, option, 1, 100);
                     speedBufferExplicitlySet = true;
                     i++;
                     break;
-
 
                 // --- Timeouts ---
                 case "--tcp-timeout": GlobalContext.Config.TcpTimeoutMs = ParseInt(value, option, 100, 30000); i++; break;
@@ -108,27 +108,33 @@ public static class ArgParser
                 // --- Profiles (Already handled in pre-scan, skip here) ---
                 case "--fast": case "--slow": case "--extreme": case "--normal": break;
                 case "-y": case "--yes": case "--no-confirm": skipConfirmation = true; break;
-                case "-p": case "--port": GlobalContext.Config.Port = ParsePort(value, option); i++; break;
 
-                default: ErrorAndExit($"Unknown option: {args[i]}"); return false;
+                // --- Port Selection (UPDATED) ---
+                case "-p":
+                case "--port":
+                    GlobalContext.Config.Ports = ParsePort(value, option);
+                    i++;
+                    break;
+
+                default:
+                    ErrorAndExit($"Unknown option: {args[i]}");
+                    return false;
             }
         }
 
         // 4. Auto-scale Buffers (if not explicitly set by user)
-        // This ensures buffers are always proportional to the FINAL worker counts.
         if (!tcpBufferExplicitlySet)
             GlobalContext.Config.TcpChannelBuffer = Math.Max(GlobalContext.Config.TcpWorkers * 2, 100);
 
         if (!v2rayBufferExplicitlySet)
             GlobalContext.Config.V2RayChannelBuffer = Math.Max(GlobalContext.Config.V2RayWorkers * 3, 20);
 
-        // Smart default for SpeedTest Buffer:
-        // Ideally should be (Workers + 1) to keep pipeline flowing but prevent resource bloat.
         if (!speedBufferExplicitlySet)
             GlobalContext.Config.SpeedTestBuffer = GlobalContext.Config.SpeedTestWorkers + 1;
 
         // 5. User Feedback
-        if (!skipConfirmation) DisplayProfileSummary(profile);
+        if (!skipConfirmation)
+            DisplayProfileSummary(profile);
 
         return true;
     }
@@ -139,9 +145,6 @@ public static class ArgParser
 
     private enum ScanProfile { Normal, Fast, Slow, Extreme }
 
-    /// <summary>
-    /// Scans arguments to detect the requested profile. Defaults to Normal.
-    /// </summary>
     private static ScanProfile DetectProfile(string[] args)
     {
         if (args.Any(a => a.Equals("--extreme", StringComparison.OrdinalIgnoreCase))) return ScanProfile.Extreme;
@@ -155,24 +158,43 @@ public static class ArgParser
     /// </summary>
     private static readonly HashSet<int> AllowedPorts =
     [
-        443,2053,2083,2087,2096,8443
+        443, 2053, 2083, 2087, 2096, 8443
     ];
+
     /// <summary>
-    /// Extract Port Number from arguments.
+    /// Extract HTTPS port(s) from arguments.
+    /// Supports single port, comma-separated ports, or 'all'.
     /// </summary>
-    private static int ParsePort(string? value, string option)
+    private static List<int> ParsePort(string? value, string option)
     {
         if (string.IsNullOrWhiteSpace(value))
             ErrorAndExit($"Missing value for option: {option}");
-        if (!int.TryParse(value, out int port))
+
+        value = value.Trim().ToLowerInvariant();
+
+        if (value == "all")
+            return AllowedPorts.OrderBy(p => p).ToList();
+
+        var parts = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length == 0)
             ErrorAndExit($"Invalid port value: {value} for option: {option}");
-        if (!AllowedPorts.Contains(port))
-            ErrorAndExit($"Port {port} is not allowed. Allowed ports are: {string.Join(", ", AllowedPorts)}");
-        return port;
+
+        var ports = new List<int>();
+
+        foreach (var part in parts)
+        {
+            if (!int.TryParse(part, out int port))
+                ErrorAndExit($"Invalid port value: {part} for option: {option}");
+
+            if (!AllowedPorts.Contains(port))
+                ErrorAndExit($"Port {port} is not allowed. Allowed ports are: {string.Join(", ", AllowedPorts)}");
+
+            ports.Add(port);
+        }
+
+        return ports.Distinct().OrderBy(p => p).ToList();
     }
-    /// <summary>
-    /// Applies base settings for the selected profile.
-    /// </summary>
+
     private static void ApplyProfileDefaults(ScanProfile profile)
     {
         switch (profile)
@@ -218,7 +240,6 @@ public static class ArgParser
 
             case ScanProfile.Normal:
             default:
-                // Normal uses the default values initialized in Defaults class
                 break;
         }
     }
@@ -237,7 +258,6 @@ public static class ArgParser
         Console.WriteLine($" SCAN CONFIGURATION | PROFILE: {profile.ToString().ToUpper()}");
         Console.WriteLine("============================================================");
         Console.ResetColor();
-
         // -----------------------------------------------------------------
         // 1. Concurrency & Buffers
         // -----------------------------------------------------------------
@@ -245,18 +265,13 @@ public static class ArgParser
         Console.WriteLine(" [Concurrency & Buffers]");
         Console.ResetColor();
 
-        Console.WriteLine(
-            $"   TCP Workers:           {config.TcpWorkers,-6} | Buffer: {config.TcpChannelBuffer}");
-
-        Console.WriteLine(
-            $"   Signature Workers:     {config.SignatureWorkers,-6} | (Internal)");
+        Console.WriteLine($"   TCP Workers:           {config.TcpWorkers,-6} | Buffer: {config.TcpChannelBuffer}");
+        Console.WriteLine($"   Signature Workers:     {config.SignatureWorkers,-6} | (Internal)");
 
         if (config.EnableV2RayCheck)
         {
-            Console.WriteLine(
-                $"   V2Ray Workers:         {config.V2RayWorkers,-6} | Buffer: {config.V2RayChannelBuffer}");
+            Console.WriteLine($"   V2Ray Workers:         {config.V2RayWorkers,-6} | Buffer: {config.V2RayChannelBuffer}");
         }
-
         // -----------------------------------------------------------------
         // 2. Speed Test Summary
         // -----------------------------------------------------------------
@@ -266,23 +281,12 @@ public static class ArgParser
             Console.WriteLine("\n [Speed Test Criteria]");
             Console.ResetColor();
 
-            string minDl =
-                config.MinDownloadSpeedKb > 0
-                    ? $"{config.MinDownloadSpeedKb} KB/s"
-                    : "N/A";
+            string minDl = config.MinDownloadSpeedKb > 0 ? $"{config.MinDownloadSpeedKb} KB/s" : "N/A";
+            string minUl = config.MinUploadSpeedKb > 0 ? $"{config.MinUploadSpeedKb} KB/s" : "N/A";
 
-            string minUl =
-                config.MinUploadSpeedKb > 0
-                    ? $"{config.MinUploadSpeedKb} KB/s"
-                    : "N/A";
-
-            Console.WriteLine(
-                $"   Min Download:     {minDl,-10} | Workers: {config.SpeedTestWorkers}");
-
-            Console.WriteLine(
-                $"   Min Upload:       {minUl,-10} | Buffer:  {config.SpeedTestBuffer}");
+            Console.WriteLine($"   Min Download:     {minDl,-10} | Workers: {config.SpeedTestWorkers}");
+            Console.WriteLine($"   Min Upload:       {minUl,-10} | Buffer:  {config.SpeedTestBuffer}");
         }
-
         // -----------------------------------------------------------------
         // 3. Timeouts
         // -----------------------------------------------------------------
@@ -290,21 +294,14 @@ public static class ArgParser
         Console.WriteLine("\n [Timeouts (ms)]");
         Console.ResetColor();
 
-        Console.WriteLine(
-            $"   TCP Connect:      {config.TcpTimeoutMs,-6} | TLS Handshake: {config.TlsTimeoutMs}");
-
-        Console.WriteLine(
-            $"   HTTP Read:        {config.HttpReadTimeoutMs,-6} | Signature Total:  {config.SignatureTotalTimeoutMs}");
+        Console.WriteLine($"   TCP Connect:      {config.TcpTimeoutMs,-6} | TLS Handshake: {config.TlsTimeoutMs}");
+        Console.WriteLine($"   HTTP Read:        {config.HttpReadTimeoutMs,-6} | Signature Total:  {config.SignatureTotalTimeoutMs}");
 
         if (config.EnableV2RayCheck)
         {
-            Console.WriteLine(
-                $"   Xray Start:       {config.XrayStartupTimeoutMs,-6} | Xray Conn:   {config.XrayConnectionTimeoutMs}");
-
-            Console.WriteLine(
-                $"   Xray Kill:        {config.XrayProcessKillTimeoutMs,-6}");
+            Console.WriteLine($"   Xray Start:       {config.XrayStartupTimeoutMs,-6} | Xray Conn:   {config.XrayConnectionTimeoutMs}");
+            Console.WriteLine($"   Xray Kill:        {config.XrayProcessKillTimeoutMs,-6}");
         }
-
         // -----------------------------------------------------------------
         // 4. Behavior & Settings
         // -----------------------------------------------------------------
@@ -312,21 +309,17 @@ public static class ArgParser
         Console.WriteLine("\n [Settings]");
         Console.ResetColor();
 
-        string v2rayStatus =
-            config.EnableV2RayCheck ? "Enabled" : "Disabled";
-
-        string randomSniPart =
-            config.EnableV2RayCheck
-                ? $"   | Random SNI: {(config.RandomSNI ? "Enabled" : "Disabled")}"
-                : string.Empty;
+        string v2rayStatus = config.EnableV2RayCheck ? "Enabled" : "Disabled";
+        string randomSniPart = config.EnableV2RayCheck
+            ? $"   | Random SNI: {(config.RandomSNI ? "Enabled" : "Disabled")}"
+            : string.Empty;
 
         Console.WriteLine($"   V2Ray Check:      {v2rayStatus}");
         Console.WriteLine($"   Shuffle IPs:      {config.Shuffle,-6} | Sort Results: {config.SortResults}");
         Console.WriteLine($"   Save Latency:     {config.SaveLatency}");
-        Console.WriteLine($"   Port Number:      {config.Port}{randomSniPart}");
+        Console.WriteLine($"   Ports:            {string.Join(", ", config.Ports)}{randomSniPart}");
 
         Console.WriteLine("============================================================");
-
         // -----------------------------------------------------------------
         // Confirmation
         // -----------------------------------------------------------------
@@ -408,9 +401,7 @@ public static class ArgParser
         }
 
         if (!double.TryParse(numberPart, NumberStyles.Any, CultureInfo.InvariantCulture, out double result))
-        {
             ErrorAndExit($"Invalid bandwidth value for '{option}': {value}. Examples: 500kb, 2mb.");
-        }
 
         int finalKb = (int)(result * multiplier);
         if (finalKb < 0) ErrorAndExit($"Value for '{option}' cannot be negative.");
@@ -443,6 +434,7 @@ INPUT:
   -f <FILE> | -a <ASN> | -r <CIDR>
 
 OPTIONS:
+  -p, --port <PORT|PORTS|all>    HTTPS port(s) to scan
   -vc <CONFIG>   Enable real V2Ray verification
   --speed-dl     Min download speed (e.g., 2mb, 500kb)
   --speed-ul     Min upload speed (e.g., 1mb)
@@ -525,9 +517,13 @@ XRAY / V2RAY
   -vc, --v2ray-config <PATH>     Enable real Xray verification
                                  (Requires valid Xray config)
   --random-sni                   Enable Random SNI for each request
+
 PORT SELECTION
 --------------
-  -p, --port <PORT>              HTTPS port to scan
+  -p, --port <PORT|PORTS|all>    HTTPS port(s) to scan
+                                 Single port, comma-separated ports,
+                                 or keyword 'all'
+
                                  Allowed:
                                  443, 2053, 2083, 2087, 2096, 8443
 

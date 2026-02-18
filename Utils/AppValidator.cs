@@ -55,11 +55,11 @@ public static class AppValidator
                     $"V2Ray config file not found: {configPath}");
                 hasError = true;
             }
-            else
-            {
-                // Port consistency check (WARNING ONLY)
-                TryWarnOnV2RayPortMismatch(configPath);
-            }
+            //else
+            //{
+            //    // Port consistency check (WARNING ONLY)
+            //    TryWarnOnV2RayPortMismatch(configPath);
+            //}
         }
 
         // -----------------------------------------------------------------
@@ -100,50 +100,50 @@ public static class AppValidator
     // Helper: V2Ray Port Consistency Warning
     // ---------------------------------------------------------------------
 
-    private static void TryWarnOnV2RayPortMismatch(string configPath)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(File.ReadAllText(configPath));
+    //private static void TryWarnOnV2RayPortMismatch(string configPath)
+    //{
+    //    try
+    //    {
+    //        using var doc = JsonDocument.Parse(File.ReadAllText(configPath));
 
-            if (!doc.RootElement.TryGetProperty("outbounds", out var outbounds) ||
-                outbounds.GetArrayLength() == 0)
-                return;
+    //        if (!doc.RootElement.TryGetProperty("outbounds", out var outbounds) ||
+    //            outbounds.GetArrayLength() == 0)
+    //            return;
 
-            var outbound = outbounds[0];
+    //        var outbound = outbounds[0];
 
-            if (!outbound.TryGetProperty("settings", out var settings) ||
-                !settings.TryGetProperty("vnext", out var vnext) ||
-                vnext.GetArrayLength() == 0)
-                return;
+    //        if (!outbound.TryGetProperty("settings", out var settings) ||
+    //            !settings.TryGetProperty("vnext", out var vnext) ||
+    //            vnext.GetArrayLength() == 0)
+    //            return;
 
-            var target = vnext[0];
+    //        var target = vnext[0];
 
-            if (!target.TryGetProperty("port", out var portProp))
-                return;
+    //        if (!target.TryGetProperty("port", out var portProp))
+    //            return;
 
-            int configPort = portProp.GetInt32();
-            int scannerPort = GlobalContext.Config.Port;
+    //        int configPort = portProp.GetInt32();
+    //        var scannerPorts = GlobalContext.Config.Ports;
 
-            if (configPort == scannerPort)
-                return;
+    //        if (configPort == scannerPort)
+    //            return;
 
-            bool continueScan = ConsoleInterface.PrintWarning(
-                "V2Ray port mismatch detected:\n" +
-                $"  • Scanner port : {scannerPort}\n" +
-                $"  • Config port  : {configPort}\n\n" +
-                "TCP and Signature stages will use the scanner port,\n" +
-                "while Real Xray verification will use the config port.\n" +
-                "This may work, but results may be inconsistent.\n\n" +
-                "Do you want to continue anyway?",
-                requireConfirmation: true);
+    //        bool continueScan = ConsoleInterface.PrintWarning(
+    //            "V2Ray port mismatch detected:\n" +
+    //            $"  • Scanner port : {scannerPort}\n" +
+    //            $"  • Config port  : {configPort}\n\n" +
+    //            "TCP and Signature stages will use the scanner port,\n" +
+    //            "while Real Xray verification will use the config port.\n" +
+    //            "This may work, but results may be inconsistent.\n\n" +
+    //            "Do you want to continue anyway?",
+    //            requireConfirmation: true);
 
-            if (!continueScan)
-                Environment.Exit(1);
-        }
-        catch
-        {
-            // Silently ignore malformed or non-standard configs
-        }
-    }
+    //        if (!continueScan)
+    //            Environment.Exit(1);
+    //    }
+    //    catch
+    //    {
+    //        // Silently ignore malformed or non-standard configs
+    //    }
+    //}
 }
