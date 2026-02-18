@@ -231,22 +231,6 @@ public static class V2RayController
             // Verify process is still active before proceeding
             if (xrayProcess.HasExited) return;
 
-            // Perform download speed test
-            long dlSpeed = 0;
-            if (GlobalContext.Config.MinDownloadSpeedKb > 0)
-            {
-                dlSpeed = await MeasureDownloadSpeed(localPort, ct);
-                if (dlSpeed < GlobalContext.Config.MinDownloadSpeedKb)
-                {
-                    ConsoleInterface.PrintSuccess(
-                        ipAddress,
-                        pingLatency,
-                        $"REAL-XRAY - Download Test Failed ({dlSpeed} KB/s)",
-                        ConsoleColor.DarkYellow);
-                    return;
-                }
-            }
-
             // Perform upload speed test
             long ulSpeed = 0;
             if (GlobalContext.Config.MinUploadSpeedKb > 0)
@@ -263,6 +247,23 @@ public static class V2RayController
                 }
             }
 
+            // Perform download speed test
+            long dlSpeed = 0;
+            if (GlobalContext.Config.MinDownloadSpeedKb > 0)
+            {
+                dlSpeed = await MeasureDownloadSpeed(localPort, ct);
+                if (dlSpeed < GlobalContext.Config.MinDownloadSpeedKb)
+                {
+                    ConsoleInterface.PrintSuccess(
+                        ipAddress,
+                        pingLatency,
+                        $"REAL-XRAY - Download Test Failed)",
+                        ConsoleColor.DarkYellow);
+                    return;
+                }
+            }
+
+          
             // Both tests passed; save result
             FileUtils.SaveResult(ipAddress, pingLatency);
 
