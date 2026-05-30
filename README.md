@@ -133,7 +133,7 @@ You must provide a valid working JSON configuration file.
 >   the server **must expose a dedicated inbound listener for each scanned port**.
 >
 > - All corresponding V2Ray/Xray inbounds **must share the same UUID** and
->   **must use identical `path` and `SNI` values** to ensure deterministic behavior.
+>   **must use identical `path`, `host` and `SNI` values** to work.
 >
 > - If a **wildcard TLS certificate** is used, the **left-most label of the SNI
 >   may vary**, while the remaining domain must remain identical.
