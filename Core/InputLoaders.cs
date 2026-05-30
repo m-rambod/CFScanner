@@ -60,9 +60,9 @@ public static class InputLoader
     /// </list>
     /// </returns>
     public static async Task<(IEnumerable<IPAddress> Source, long Total, bool IsInfinite)>
-        LoadTargetsAsync()
+     LoadTargetsAsync()
     {
-        var inputIps = new List<IPAddress>();
+        var inputIps = new List<uint>();   // 4 bytes per entry instead of ~48-64
         bool specificInputProvided = false;
 
         // -------------------------------------------------------------
@@ -75,7 +75,8 @@ public static class InputLoader
             foreach (var file in GlobalContext.Config.InputFiles)
             {
                 Console.Write($"Loading file {Path.GetFileName(file)}... ");
-                inputIps.AddRange(await FileUtils.LoadIpsAsync(file));
+                foreach (var ip in await FileUtils.LoadIpsAsync(file))
+                    inputIps.Add(NetUtils.IpToUint(ip));
                 Console.WriteLine("Done.");
             }
         }
@@ -90,10 +91,12 @@ public static class InputLoader
             Console.Write(
                 $"Loading ASNs ({string.Join(",", GlobalContext.Config.InputAsns)})... ");
 
-            inputIps.AddRange(
-                IpFilter.IpAsnSource.GetIps(
-                    GlobalContext.Config.AsnDbPath,
-                    GlobalContext.Config.InputAsns));
+            foreach (var ip in IpFilter.IpAsnSource.GetIps(
+                         GlobalContext.Config.AsnDbPath,
+                         GlobalContext.Config.InputAsns))
+            {
+                inputIps.Add(NetUtils.IpToUint(ip));
+            }
 
             Console.WriteLine("Done.");
         }
@@ -119,17 +122,19 @@ public static class InputLoader
                     // Single IP
                     if (IPAddress.TryParse(part, out var singleIp))
                     {
-                        inputIps.Add(singleIp);
+                        inputIps.Add(NetUtils.IpToUint(singleIp));
                         continue;
                     }
 
-                    // CIDR expansion
-                    var range = NetUtils.ExpandCidr(part).ToList();
-                    if (range.Count > 0)
+                    // CIDR expansion (lazy — no intermediate List)
+                    bool anyExpanded = false;
+                    foreach (var ip in NetUtils.ExpandCidr(part))
                     {
-                        inputIps.AddRange(range);
+                        inputIps.Add(NetUtils.IpToUint(ip));
+                        anyExpanded = true;
                     }
-                    else
+
+                    if (!anyExpanded)
                     {
                         ConsoleInterface.PrintError(
                             $"Invalid IP or CIDR: {part}");
@@ -145,26 +150,53 @@ public static class InputLoader
         // -------------------------------------------------------------
         if (specificInputProvided)
         {
-            // Deduplicate and apply exclusion rules
-            var distinct = inputIps
-                .Distinct()
-                .Where(ip => !GlobalContext.IpFilter.IsBlocked(ip))
-                .ToList();
+            // Move to a flat array and release the List buffer
+            var arr = inputIps.ToArray();
+            inputIps = null!;
+
+            // Sort enables in-place dedup + exclusion filtering
+            // without allocating a HashSet (Distinct) or extra List.
+            Array.Sort(arr);
+
+            int count = 0;
+            uint prev = 0;
+            bool first = true;
+
+            for (int i = 0; i < arr.Length; i++)
+            {
+                uint v = arr[i];
+
+                // Deduplicate (array is sorted)
+                if (!first && v == prev)
+                    continue;
+
+                prev = v;
+                first = false;
+
+                // Exclusion rules (uint overload — no IPAddress allocation)
+                if (GlobalContext.IpFilter.IsBlocked(v))
+                    continue;
+
+                arr[count++] = v;   // in-place compaction
+            }
 
             Console.WriteLine(
-                $"[Mode] Fixed Range Scanner | Total IPs: {distinct.Count:N0}");
+                $"[Mode] Fixed Range Scanner | Total IPs: {count:N0}");
 
-            // Optional deterministic randomization
+            // Optional randomization (in-place Fisher-Yates on uint[])
             if (GlobalContext.Config.Shuffle)
             {
                 Console.WriteLine("[Info] Shuffling IPs...");
-                NetUtils.ShuffleList(distinct);
+                NetUtils.Shuffle(arr, count);
             }
 
-            return (distinct, distinct.Count, false);
+            // Lazily materialize IPAddress objects one at a time
+            return (StreamIps(arr, count), count, false);
         }
 
+        // -------------------------------------------------------------
         // Infinite random mode (fallback)
+        // -------------------------------------------------------------
         Console.WriteLine("[Mode] Random IPv4 Scanner (Infinite)");
 
         if (GlobalContext.IpFilter.RangeCount == 0)
@@ -174,4 +206,13 @@ public static class InputLoader
 
         return (NetUtils.GenerateRandomIps(), -1, true);
     }
+
+    // Converts uint -> IPAddress on demand so only one object
+    // lives in memory at any given moment during scanning.
+    private static IEnumerable<IPAddress> StreamIps(uint[] arr, int count)
+    {
+        for (int i = 0; i < count; i++)
+            yield return NetUtils.UintToIp(arr[i]);
+    }
+
 }

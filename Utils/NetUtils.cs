@@ -9,23 +9,7 @@ namespace CFScanner.Utils;
 /// </summary>
 public static class NetUtils
 {
-    /// <summary>
-    /// Shuffles a list in-place using Fisher-Yates algorithm.
-    /// </summary>
-    /// <typeparam name="T">Type of list elements.</typeparam>
-    /// <param name="list">List to shuffle.</param>
-    public static void ShuffleList<T>(List<T> list)
-    {
-        var rng = Random.Shared;
-        int n = list.Count;
-        while (n > 1)
-        {
-            n--;
-            int k = rng.Next(n + 1);
-            (list[k], list[n]) = (list[n], list[k]);
-        }
-    }
-
+  
     public static IEnumerable<IPAddress> ExpandCidr(string input)
     {
         // ---------------------------------------------------------------------
@@ -125,6 +109,32 @@ public static class NetUtils
                 continue;
 
             yield return new IPAddress(buf);
+        }
+    }
+
+
+    public static uint IpToUint(IPAddress ip)
+    {
+        Span<byte> b = stackalloc byte[4];
+        if (!ip.TryWriteBytes(b, out int n) || n != 4)
+            throw new NotSupportedException("Only IPv4 supported in compact mode.");
+        return ((uint)b[0] << 24) | ((uint)b[1] << 16) | ((uint)b[2] << 8) | b[3];
+    }
+
+    public static IPAddress UintToIp(uint v)
+    {
+        Span<byte> b = [(byte)(v >> 24), (byte)(v >> 16), (byte)(v >> 8), (byte)v];
+        return new IPAddress(b);
+    }
+
+    // Fisher-Yates روی uint[]  (نه IPAddress)
+    public static void Shuffle(uint[] arr, int count)
+    {
+        var rng = Random.Shared;
+        for (int i = count - 1; i > 0; i--)
+        {
+            int j = rng.Next(i + 1);
+            (arr[i], arr[j]) = (arr[j], arr[i]);
         }
     }
 }
