@@ -1,5 +1,6 @@
 ﻿using CFScanner.UI;
 using CFScanner.Utils;
+using System.Buffers;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -376,16 +377,22 @@ public static class V2RayController
                 if (!response.IsSuccessStatusCode) continue;
 
                 using var stream = await response.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false);
-                var buffer = new byte[8192];
                 long totalRead = 0;
                 var dataSw = Stopwatch.StartNew();
-
-                while (totalRead < testSize && !cts.Token.IsCancellationRequested)
+                var buffer = ArrayPool<byte>.Shared.Rent(8192);
+                try
                 {
-                    if (dataSw.Elapsed.TotalSeconds > MaxTransferTimeSec) break;
-                    int read = await stream.ReadAsync(buffer, cts.Token).ConfigureAwait(false);
-                    if (read == 0) break;
-                    totalRead += read;
+                    while (totalRead < testSize && !cts.Token.IsCancellationRequested)
+                    {
+                        if (dataSw.Elapsed.TotalSeconds > MaxTransferTimeSec) break;
+                        int read = await stream.ReadAsync(buffer, cts.Token).ConfigureAwait(false);
+                        if (read == 0) break;
+                        totalRead += read;
+                    }
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(buffer);
                 }
                 dataSw.Stop();
                 sw.Stop();
