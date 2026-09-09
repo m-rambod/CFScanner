@@ -77,7 +77,10 @@ public static class ScannerWorkers
 
         await PauseManager.WaitIfPausedAsync(ct);
 
-        var client = new TcpClient();
+        var client = new TcpClient
+        {
+            NoDelay = true
+        };
         bool handedOver = false;
 
         try
@@ -161,7 +164,8 @@ public static class ScannerWorkers
                         {
                             using var retryClient = new TcpClient
                             {
-                                LingerState = new LingerOption(true, 0)
+                                LingerState = new LingerOption(true, 0),
+                                NoDelay = true
                             };
 
                             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
