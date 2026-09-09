@@ -23,6 +23,9 @@ public static class V2RayController
     private const int MaxXrayStartupAttempts = 3;
     private const int MinTransferTimeSec = 2;
     private const int MaxTransferTimeSec = 5;
+    private static readonly Lock TemplateLock = new();
+    private static string? _cachedTemplateJson;
+    private static JsonNode? _cachedTemplateNode;
 
     /// <summary>
     /// Pre-allocated buffer for upload speed tests to reduce memory allocation overhead.
@@ -142,7 +145,7 @@ public static class V2RayController
             for (var attempt = 0; attempt < MaxXrayStartupAttempts; attempt++)
             {
                 localPort = GetFreeTcpPort();
-                var rootNode = JsonNode.Parse(GlobalContext.RawV2RayTemplate);
+                var rootNode = CloneTemplateForConfig();
                 if (rootNode == null) return false;
 
                 rootNode["inbounds"] = new JsonArray(new JsonObject
@@ -227,6 +230,22 @@ public static class V2RayController
             {
                 await TerminateProcessAsync(xrayProcess);
             }
+        }
+    }
+
+    private static JsonNode? CloneTemplateForConfig()
+    {
+        string templateJson = GlobalContext.RawV2RayTemplate;
+
+        lock (TemplateLock)
+        {
+            if (!string.Equals(_cachedTemplateJson, templateJson, StringComparison.Ordinal))
+            {
+                _cachedTemplateNode = JsonNode.Parse(templateJson);
+                _cachedTemplateJson = templateJson;
+            }
+
+            return _cachedTemplateNode?.DeepClone();
         }
     }
 
