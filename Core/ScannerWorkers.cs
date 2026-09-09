@@ -1,4 +1,5 @@
 ﻿using System.Buffers;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Security;
@@ -27,6 +28,9 @@ namespace CFScanner.Core;
 /// </summary>
 public static class ScannerWorkers
 {
+    private const int MaxRetainedHeaderBuilderCapacity = 16 * 1024;
+    private static readonly ConcurrentBag<StringBuilder> HeaderBuilderPool = new();
+
     // ---------------------------------------------------------------------
     // Channel Data Contracts
     // ---------------------------------------------------------------------
@@ -353,7 +357,8 @@ public static class ScannerWorkers
             await sslStream.WriteAsync(Encoding.ASCII.GetBytes(request), token);
 
             var buffer = ArrayPool<byte>.Shared.Rent(4096);
-            var sb = new StringBuilder();
+            var sb = RentHeaderBuilder();
+            string headers = string.Empty;
 
             try
             {
@@ -372,10 +377,11 @@ public static class ScannerWorkers
             finally
             {
                 ArrayPool<byte>.Shared.Return(buffer);
+                headers = sb.ToString();
+                ReturnHeaderBuilder(sb);
             }
 
             sw.Stop();
-            string headers = sb.ToString();
 
             if (string.IsNullOrWhiteSpace(headers) ||
                 !headers.StartsWith("HTTP/", StringComparison.OrdinalIgnoreCase))
@@ -427,6 +433,18 @@ public static class ScannerWorkers
             return false;
 
         return true;
+    }
+
+    private static StringBuilder RentHeaderBuilder() =>
+        HeaderBuilderPool.TryTake(out var builder) ? builder : new StringBuilder(1024);
+
+    private static void ReturnHeaderBuilder(StringBuilder builder)
+    {
+        if (builder.Capacity > MaxRetainedHeaderBuilderCapacity)
+            return;
+
+        builder.Clear();
+        HeaderBuilderPool.Add(builder);
     }
 
 
